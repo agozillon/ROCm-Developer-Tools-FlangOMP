@@ -2994,6 +2994,13 @@ struct GlobalOpConversion : public FIROpConversion<fir::GlobalOp> {
     auto isConst = global.getConstant().has_value();
     auto g = rewriter.create<mlir::LLVM::GlobalOp>(
         loc, tyAttr, isConst, linkage, global.getSymName(), initAttr);
+
+    // Apply all non-LLVM::GlobalOp attributes to the GlobalOp, preserving them;
+    // whilst taking care not to apply duplicates
+    for (auto attr : global->getAttrs())
+      if (!g->getAttrDictionary().contains(attr.getName()))
+        g->setAttr(attr.getName(), attr.getValue());
+
     auto &gr = g.getInitializerRegion();
     rewriter.inlineRegionBefore(global.getRegion(), gr, gr.end());
     if (!gr.empty()) {
