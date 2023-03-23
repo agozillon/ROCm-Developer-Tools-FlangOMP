@@ -1425,15 +1425,15 @@ LogicalResult CancellationPointOp::verify() {
 void OpenMPDialect::setIsDevice(Operation* module, bool isDevice) {
   module->setAttr(
       mlir::StringAttr::get(module->getContext(), llvm::Twine{"omp.is_device"}),
-      mlir::BoolAttr::get(module->getContext(), isDevice));
+      mlir::omp::IsDeviceAttr::get(module->getContext(), isDevice));
 }
 
 // Return the value of the omp.is_device attribute stored in the module if it
 // exists, otherwise return false by default
 bool OpenMPDialect::getIsDevice(Operation *module) {
   if (Attribute isDevice = module->getAttr("omp.is_device"))
-    if (isDevice.isa<mlir::BoolAttr>())
-      return isDevice.dyn_cast<BoolAttr>().getValue();
+    if (isDevice.isa<mlir::omp::IsDeviceAttr>())
+      return isDevice.dyn_cast<IsDeviceAttr>().getIsDevice();
   return false;
 }
 
