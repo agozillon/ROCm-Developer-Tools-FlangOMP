@@ -170,6 +170,10 @@ public:
     return ompBuilder.get();
   }
 
+  llvm::Module *getLLVMModule() {
+    return llvmModule.get();
+  }
+
   /// Translates the given location.
   const llvm::DILocation *translateLoc(Location loc, llvm::DILocalScope *scope);
 

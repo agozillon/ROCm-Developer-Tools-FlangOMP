@@ -5009,10 +5009,11 @@ void OpenMPIRBuilder::createOffloadEntriesAndInfoMetadata(
           continue;
         break;
       }
-      case OffloadEntriesInfoManager::OMPTargetGlobalVarEntryLink:
+      case OffloadEntriesInfoManager::OMPTargetGlobalVarEntryLink:     
         assert(((Config.isEmbedded() && !CE->getAddress()) ||
                 (!Config.isEmbedded() && CE->getAddress())) &&
                "Declaret target link address is set.");
+
         if (Config.isEmbedded())
           continue;
         if (!CE->getAddress()) {
