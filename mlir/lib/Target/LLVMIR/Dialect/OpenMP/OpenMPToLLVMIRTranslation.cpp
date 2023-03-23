@@ -1736,6 +1736,10 @@ convertDeclareTargetAttr(Operation *op, mlir::omp::DeclareTargetAttr attribute,
   auto modOp = op->getParentOfType<mlir::ModuleOp>();
   bool isDevice = mlir::omp::OpenMPDialect::getIsDevice(modOp);
 
+  ompBuilder->Config.setIsEmbedded(isDevice);
+  ompBuilder->Config.setIsTargetCodegen(isDevice);
+  ompBuilder->Config.setHasRequiresUnifiedSharedMemory(false);
+
   // do a return for functions at the moment, may need specialised lowering
   // later to optimise but for the moment they execute on device. Or could
   // perhaps be deleted from the module at this point.
@@ -1762,13 +1766,40 @@ convertDeclareTargetAttr(Operation *op, mlir::omp::DeclareTargetAttr attribute,
                                  isDevice);
   }
 
+  return success();
+}
+
+LogicalResult convertIsDeviceAttr(Operation *op,
+                                  mlir::omp::IsDeviceAttr attribute,
+                                  LLVM::ModuleTranslation &moduleTranslation) {
+
+  // TODO/FIXME: There may be a more MLIR way to do this using the verifier,
+  // but this should be the final omp attribute on a module to prevent
+  // possible issues with lowering offload information too early
+  bool isAfterDeviceAttr = false;
+  for (auto attr : op->getDialectAttrs()) {
+    if (isAfterDeviceAttr && attr.getNameDialect()->getNamespace() == "omp")
+      assert(false &&
+             "omp.is_device needs to be the last omp dialect attribtue on a "
+             "module");
+
+    if (attr.getName() == "omp.is_device")
+      isAfterDeviceAttr = true;
+  }
+
   llvm::OpenMPIRBuilder::EmitMetadataErrorReportFunctionTy &&errorReportFn =
       [](llvm::OpenMPIRBuilder::EmitMetadataErrorKind kind,
          const llvm::TargetRegionEntryInfo &entryInfo) -> void {
-    llvm::errs() << "Error emitting globals";
+    llvm::errs() << "Error emitting offload entries and metadata at the end of "
+                    "the module \n";
   };
 
-  ompBuilder->createOffloadEntriesAndInfoMetadata(errorReportFn);
+  if (!attribute.getIsDevice()) {
+    // TODO: Generate/lower Target Register functions
+  }
+
+  moduleTranslation.getOpenMPBuilder()->createOffloadEntriesAndInfoMetadata(
+      errorReportFn);
 
   return success();
 }
@@ -1777,19 +1808,16 @@ convertDeclareTargetAttr(Operation *op, mlir::omp::DeclareTargetAttr attribute,
 LogicalResult OpenMPDialectLLVMIRTranslationInterface::amendOperation(
     Operation *op, NamedAttribute attribute,
     LLVM::ModuleTranslation &moduleTranslation) const {
-
-    
-    // llvm::errs() << "I enter amend operation \n";
-    // op->dump();
-    // llvm::errs() << "isDeclareTarget? " << mlir::omp::OpenMPDialect::isDeclareTarget(op) << "\n";
-    return llvm::TypeSwitch<Attribute, LogicalResult>(attribute.getValue())
+  return llvm::TypeSwitch<Attribute, LogicalResult>(attribute.getValue())
       .Case([&](mlir::omp::DeclareTargetAttr dtAttr) {
         return convertDeclareTargetAttr(op, dtAttr, moduleTranslation);
+      })
+      .Case([&](mlir::omp::IsDeviceAttr devAttr) {
+        return convertIsDeviceAttr(op, devAttr, moduleTranslation);
       })
       .Default([&](Attribute attr) {
         // fall through for omp attributes that do not require lowering and/or
         // have no concrete definition and thus no type to define a case on
-        // e.g. omp.is_device
         return success();
       });
 
