@@ -1,4 +1,5 @@
 // RUN: mlir-translate -mlir-to-llvmir %s | FileCheck %s
+// FIXME Test is broken, not sure how to resolve conflicts
 
 module attributes {omp.is_target_device = true} {
   llvm.func @omp_target_region_() {
@@ -12,7 +13,7 @@ module attributes {omp.is_target_device = true} {
     %7 = llvm.alloca %6 x i32 {bindc_name = "c", in_type = i32, operandSegmentSizes = array<i32: 0, 0>, uniq_name = "_QFomp_target_regionEc"} : (i64) -> !llvm.ptr<i32>
     llvm.store %1, %3 : !llvm.ptr<i32>
     llvm.store %0, %5 : !llvm.ptr<i32>
-    omp.target map((to -> %3 : !llvm.ptr<i32>), (to -> %5 : !llvm.ptr<i32>), (from -> %7 : !llvm.ptr<i32>)) {
+    omp.target map((ByRef, tofrom -> %3 : !llvm.ptr<i32>), (ByRef, tofrom -> %5 : !llvm.ptr<i32>), (ByRef, tofrom -> %7 : !llvm.ptr<i32>)) {
       %8 = llvm.load %3 : !llvm.ptr<i32>
       %9 = llvm.load %5 : !llvm.ptr<i32>
       %10 = llvm.add %8, %9  : i32
