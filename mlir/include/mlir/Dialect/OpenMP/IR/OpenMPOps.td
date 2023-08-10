@@ -1004,6 +1004,74 @@ def FlushOp : OpenMP_Op<"flush"> {
   }];
 }
 
+class OpenMP_Type<string name, string typeMnemonic> : TypeDef<OpenMP_Dialect, name> {
+  let mnemonic = typeMnemonic;
+}
+
+def DataBoundsType : OpenMP_Type<"DataBounds", "data_bounds_ty"> {
+  let summary = "Type for representing acc data clause bounds information";
+}
+
+def DataBoundsOp : OpenMP_Op<"bounds",
+    [AttrSizedOperandSegments, NoMemoryEffect]> {
+  let summary = "Represents normalized bounds information for map and data clauses.";
+
+  let description = [{
+    This operation is a variation on the OpenACC dialects DataBoundsOp 
+    it is used to record bounds used in map and data clauses in a
+    normalized fashion (zero-based). This works well with the `PointerLikeType`
+    requirement in data clauses - since a `lowerbound` of 0 means looking
+    at data at the zero offset from pointer.
+
+    The operation must have an `upperbound` or `extent` (or both are allowed -
+    but not checked for consistency). When the source language's arrays are
+    not zero-based, the `startIdx` must specify the zero-position index.
+
+    Examples below show copying a slice of 10-element array except first element.
+    To simplify examples, the constants are used directly in the acc.bounds 
+    operands - this is not the syntax of operation.
+
+    C++:
+    ```
+    int array[10];
+    #pragma target map(array[1:9])
+    ```
+    =>
+    ```mlir
+    omp.bounds lb(1) ub(9) extent(9) startIdx(0)
+    ```
+
+    Fortran:
+    ```
+    integer :: array(1:10)
+    !$target map(array(2:10))
+    ```
+    =>
+    ```mlir
+    omp.bounds lb(1) ub(9) extent(9) startIdx(1)
+    ```
+  }];
+
+  let arguments = (ins Optional<IntLikeType>:$lowerbound,
+                       Optional<IntLikeType>:$upperbound,
+                       Optional<IntLikeType>:$extent,
+                       Optional<IntLikeType>:$stride,
+                       DefaultValuedAttr<BoolAttr, "false">:$strideInBytes,
+                       Optional<IntLikeType>:$startIdx);
+  let results = (outs DataBoundsType:$result);
+
+  let assemblyFormat = [{
+    oilist(
+        `lowerbound` `(` $lowerbound `:` type($lowerbound) `)`
+      | `upperbound` `(` $upperbound `:` type($upperbound) `)`
+      | `extent` `(` $extent `:` type($extent) `)`
+      | `stride` `(` $stride `:` type($stride) `)`
+      | `startIdx` `(` $startIdx `:` type($startIdx) `)`
+    ) attr-dict
+  }];
+
+  let hasVerifier = 1;
+}
 
 //===---------------------------------------------------------------------===//
 // 2.14.2 target data Construct

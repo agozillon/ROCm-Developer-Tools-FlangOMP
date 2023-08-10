@@ -66,6 +66,10 @@ void OpenMPDialect::initialize() {
 #define GET_ATTRDEF_LIST
 #include "mlir/Dialect/OpenMP/IR/OpenMPOpsAttributes.cpp.inc"
       >();
+  addTypes<
+#define GET_TYPEDEF_LIST
+#include "mlir/Dialect/OpenMP/IR/OpenMPOpsTypes.cpp.inc"
+      >();
 
   addInterface<OpenMPDialectFoldInterface>();
   LLVM::LLVMPointerType::attachInterface<
@@ -1553,6 +1557,7 @@ LogicalResult CancelOp::verify() {
   // TODO : Add more when we support taskgroup.
   return success();
 }
+
 //===----------------------------------------------------------------------===//
 // Verifier for CancelOp
 //===----------------------------------------------------------------------===//
@@ -1585,8 +1590,23 @@ LogicalResult CancellationPointOp::verify() {
   return success();
 }
 
+//===----------------------------------------------------------------------===//
+// DataBoundsOp
+//===----------------------------------------------------------------------===//
+
+LogicalResult DataBoundsOp::verify() {
+  auto extent = getExtent();
+  auto upperbound = getUpperbound();
+  if (!extent && !upperbound)
+    return emitError("expected extent or upperbound.");
+  return success();
+}
+
 #define GET_ATTRDEF_CLASSES
 #include "mlir/Dialect/OpenMP/IR/OpenMPOpsAttributes.cpp.inc"
 
 #define GET_OP_CLASSES
 #include "mlir/Dialect/OpenMP/IR/OpenMPOps.cpp.inc"
+
+#define GET_TYPEDEF_CLASSES
+#include "mlir/Dialect/OpenMP/IR/OpenMPOpsTypes.cpp.inc"

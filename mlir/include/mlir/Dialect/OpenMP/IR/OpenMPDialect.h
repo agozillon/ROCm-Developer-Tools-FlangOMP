@@ -21,6 +21,9 @@
 #include "mlir/Interfaces/ControlFlowInterfaces.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 
+#define GET_TYPEDEF_CLASSES
+#include "mlir/Dialect/OpenMP/IR/OpenMPOpsTypes.h.inc"
+
 #include "mlir/Dialect/OpenMP/IR/OpenMPOpsDialect.h.inc"
 #include "mlir/Dialect/OpenMP/IR/OpenMPOpsEnums.h.inc"
 #include "mlir/Dialect/OpenMP/IR/OpenMPTypeInterfaces.h.inc"
