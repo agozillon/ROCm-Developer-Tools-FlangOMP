@@ -2812,9 +2812,6 @@ genDataOp(Fortran::lower::AbstractConverter &converter,
   mlir::Value ifClauseOperand, deviceOperand;
   llvm::SmallVector<mlir::Value> mapOperands, devicePtrOperands,
       deviceAddrOperands;
-  llvm::SmallVector<mlir::IntegerAttr> mapTypes;
-  llvm::SmallVector<mlir::omp::VariableCaptureKindAttr> mapCaptureKinds;
-  llvm::SmallVector<int64_t> mapUShape, mapLShape, mapUBounds, mapLBounds;
   llvm::SmallVector<mlir::Type> useDeviceTypes;
   llvm::SmallVector<mlir::Location> useDeviceLocs;
   llvm::SmallVector<const Fortran::semantics::Symbol *> useDeviceSymbols;

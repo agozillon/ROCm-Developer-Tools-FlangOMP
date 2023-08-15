@@ -193,9 +193,6 @@ class OMPEarlyOutliningPass
     mlir::OpBuilder builder(context);
     llvm::SmallVector<mlir::func::FuncOp> newFuncs;
 
-
-    moduleOp.dump();
-
     for (auto functionOp :
          llvm::make_early_inc_range(moduleOp.getOps<mlir::func::FuncOp>())) {
       bool outlined = outlineTargetOps(builder, functionOp, moduleOp, newFuncs);
@@ -206,10 +203,6 @@ class OMPEarlyOutliningPass
 
     for (auto newFunc : newFuncs)
       moduleOp.push_back(newFunc);
-
-    moduleOp.dump();
-
-    llvm::errs() << "escaped? \n";
   }
 };
 

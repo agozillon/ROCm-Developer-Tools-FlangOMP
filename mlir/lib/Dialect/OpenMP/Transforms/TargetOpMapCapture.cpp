@@ -30,124 +30,79 @@ struct TargetOpMapCapturePass
     auto module = getOperation();
 
     module.walk([&](mlir::omp::TargetOp tarOp) {
-        llvm::SetVector<Value> operandSet;
-        getUsedValuesDefinedAbove(tarOp.getRegion(), operandSet);
+      llvm::SetVector<Value> operandSet;
+      getUsedValuesDefinedAbove(tarOp.getRegion(), operandSet);
 
-        llvm::SmallVector<mlir::Value> usedButNotCaptured;
-        for (auto v : operandSet) {
-            bool insertable = true;
-            for (auto mapOp : tarOp.getMapOperands())
-              if (v == mapOp)
-               insertable = false;
-            
-            if (insertable)
-              usedButNotCaptured.push_back(v);
-        }
+      llvm::SmallVector<mlir::Value> usedButNotCaptured;
+      for (auto v : operandSet) {
+        bool insertable = true;
+        for (auto mapOp : tarOp.getMapOperands())
+          if (auto mapEntry =
+                  mlir::dyn_cast<mlir::omp::MapEntryOp>(mapOp.getDefiningOp()))
+            if (v == mapEntry.getVarPtr())
+              insertable = false;
 
-        llvm::SmallVector<mlir::Attribute> newMapTypesAttr(tarOp.getMapTypesAttr().begin(),
-                                                        tarOp.getMapTypesAttr().end());
+        if (insertable)
+          usedButNotCaptured.push_back(v);
+      }
 
-        llvm::SmallVector<mlir::Attribute> newMapCapturesAttr(
-            tarOp.getMapCaptureTypesAttr().begin(),
-            tarOp.getMapCaptureTypesAttr().end());
+      // NOTE: Ponter-case, unused currently as it is a WIP.
+      // llvm::omp::OpenMPOffloadMappingFlags captureByThis =
+      //     llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_TO |
+      //     llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_FROM;
 
-        llvm::SmallVector<int64_t> lShape, lBounds;
-        if (tarOp.getMapLowerBound().has_value()) {
-            auto shape = tarOp.getMapLowerBound().value().getShapedType();
-            lShape.push_back(shape.getDimSize(0));
-            for (int64_t i = 0; i != shape.getDimSize(0); ++i) {
-              ArrayRef<int64_t> mapBound(
-                  &*std::next(
-                      tarOp.getMapLowerBound().value().value_begin<int64_t>(),
-                      i * shape.getDimSize(i + 1)),
-                  shape.getDimSize(i + 1));
-              lShape.push_back(shape.getDimSize(i + 1));
-              for (int64_t j = 0; j < shape.getDimSize(i + 1); ++j)
-               lBounds.push_back(mapBound[j]);
-            }
-        }
+      llvm::omp::OpenMPOffloadMappingFlags literalCapture =
+          llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_LITERAL;
 
-        llvm::SmallVector<int64_t> uShape, uBounds;
-        if (tarOp.getMapLowerBound().has_value()) {
-            auto shape = tarOp.getMapUpperBound().value().getShapedType();
-            uShape.push_back(shape.getDimSize(0));
-            for (int64_t i = 0; i != shape.getDimSize(0); ++i) {
-              ArrayRef<int64_t> mapBound(
-                  &*std::next(
-                      tarOp.getMapUpperBound().value().value_begin<int64_t>(),
-                      i * shape.getDimSize(i + 1)),
-                  shape.getDimSize(i + 1));
-              uShape.push_back(shape.getDimSize(i + 1));
-              for (int64_t j = 0; j < shape.getDimSize(i + 1); ++j)
-               uBounds.push_back(mapBound[j]);
-            }
-        }
-        // NOTE: Ponter-case, unused currently as it is a WIP.
-        // llvm::omp::OpenMPOffloadMappingFlags captureByThis =
-        //     llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_TO |
-        //     llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_FROM;
+      llvm::omp::OpenMPOffloadMappingFlags mapTypeBits;
 
-        llvm::omp::OpenMPOffloadMappingFlags literalCapture =
-            llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_LITERAL;
- 
-        llvm::omp::OpenMPOffloadMappingFlags mapTypeBits;
-        // Mimicing Map Type Generation code from CGOpenMPRuntime.cpp in Clang's
-        // generateDefaultMapInfo, this is an initial 
-        for (unsigned i = 0; i < usedButNotCaptured.size(); ++i) {
-            mapTypeBits = llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_NONE;
+      mlir::OpBuilder builder(tarOp);
+      llvm::SmallVector<mlir::Value> sv;
+      // Mimicing Map Type Generation code from CGOpenMPRuntime.cpp in Clang's
+      // generateDefaultMapInfo, this is an initial
+      for (auto &var : usedButNotCaptured) {
+        // TODO/NOTE: Currently doesn't handle VarPtrPtr (Struct Elements), can
+        // look at OpenMP Lower's createMapEntryOp for inspiration
+        mlir::omp::MapEntryOp op = builder.create<mlir::omp::MapEntryOp>(
+            tarOp->getLoc(), var.getType(), var);
 
-            // TODO: Case for pointers/non-literals
-            mapTypeBits = literalCapture;
-            
-            // All captures are target_param
-            mapTypeBits |= llvm::omp::OpenMPOffloadMappingFlags::
-                        OMP_MAP_TARGET_PARAM;
+        if (var.getDefiningOp())
+          op.setNameAttr(builder.getStringAttr(
+              var.getDefiningOp()->getName().getStringRef()));
+        op.setImplicit(true);
 
-            // TODO: not all captures are implicit, but it is the default case
-            // handling this needs to be extended to handle the non-default 
-            mapTypeBits |= llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_IMPLICIT;
+        // TODO: Case for pointers/non-literals
+        mapTypeBits = literalCapture;
 
-            newMapTypesAttr.push_back(IntegerAttr::get(
-                IntegerType::get(module.getContext(), 64),
-                static_cast<std::underlying_type_t<
-                    llvm::omp::OpenMPOffloadMappingFlags>>(
-                    mapTypeBits)));
+        // All captures are target_param
+        mapTypeBits |=
+            llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_TARGET_PARAM;
 
-            // TODO: placeholder, this implicit capture likely has to be moved
-            // further up into the PFT -> MLIR lowering to get access to more
-            // information to decide what is ByThis/ByVal etc.
-            newMapCapturesAttr.push_back(
-                mlir::omp::VariableCaptureKindAttr::get(
-                    module.getContext(),
-                    mlir::omp::VariableCaptureKind::ByCopy));
+        // TODO: not all captures are implicit, but it is the default
+        // handling this needs to be extended to handle the non-default
+        mapTypeBits |= llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_IMPLICIT;
 
-            if (!lShape.empty())
-                lShape[0] += 1;
-            else
-                lShape.push_back(1);
-            lBounds.push_back(0);
+        op.setMapType(
+            static_cast<
+                std::underlying_type_t<llvm::omp::OpenMPOffloadMappingFlags>>(
+                mapTypeBits));
+        op.setMapCaptureType(mlir::omp::VariableCaptureKind::ByCopy);
 
-            if (!uShape.empty())
-                uShape[0] += 1;
-            else
-                uShape.push_back(1);
-            uBounds.push_back(0);
-        }
+        // Default is an empty bounds for implicit capture, for the moment.
+        // We can likely at most generate the max lb and ub for arrays here
+        // from array ref information and give a default stride, but that
+        // may be the full extent of what's possible at the moment. Ideally
+        // we handle implicit captures at the PFT lowering level as well, but
+        // yet to work out how to do this.
+        llvm::SmallVector<mlir::Value> bounds;
+        op->setAttr(mlir::omp::MapEntryOp::getOperandSegmentSizeAttr(),
+                    builder.getDenseI32ArrayAttr(
+                        {1, 0, static_cast<int32_t>(bounds.size())}));
 
-        tarOp.getMapOperandsMutable().append(usedButNotCaptured);
-        tarOp.setMapTypesAttr(
-            ArrayAttr::get(module.getContext(), newMapTypesAttr));
-        tarOp.setMapCaptureTypesAttr(
-            ArrayAttr::get(module.getContext(), newMapCapturesAttr));
+        sv.push_back(op);
+      }
 
-        tarOp.setMapLowerBoundAttr(mlir::DenseIntElementsAttr::get(
-            mlir::VectorType::get(llvm::ArrayRef<int64_t>(lShape),
-                                  IntegerType::get(module.getContext(), 64)),
-            llvm::ArrayRef<int64_t>{lBounds}));
-        tarOp.setMapUpperBoundAttr(mlir::DenseIntElementsAttr::get(
-            mlir::VectorType::get(llvm::ArrayRef<int64_t>(uShape),
-                                  IntegerType::get(module.getContext(), 64)),
-            llvm::ArrayRef<int64_t>{uBounds}));
+      tarOp.getMapOperandsMutable().append(sv);
     });
   }
 };
