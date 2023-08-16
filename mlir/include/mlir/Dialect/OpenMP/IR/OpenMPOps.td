@@ -1031,7 +1031,7 @@ class OpenMP_Type<string name, string typeMnemonic> : TypeDef<OpenMP_Dialect, na
 }
 
 def DataBoundsType : OpenMP_Type<"DataBounds", "data_bounds_ty"> {
-  let summary = "Type for representing acc data clause bounds information";
+  let summary = "Type for representing omp data clause bounds information";
 }
 
 def DataBoundsOp : OpenMP_Op<"bounds",
@@ -1314,6 +1314,19 @@ def TargetOp : OpenMP_Op<"target",[AttrSizedOperandSegments]> {
     | `nowait` $nowait
     ) $region attr-dict
   }];
+
+  let extraClassDeclaration = [{
+    /// The number of variable operands.
+    unsigned getNumVariableOperands() {
+      return getMapOperands().size();
+    }
+
+    /// The i-th variable operand passed.
+    Value getVariableOperand(unsigned i) {
+      return getMapOperands()[i];
+    }
+  }];
+
 
   let hasVerifier = 1;
 }

@@ -207,10 +207,10 @@ void mlir::configureOpenMPToLLVMConversionLegality(
            typeConverter.isLegal(op->getOperandTypes()) &&
            typeConverter.isLegal(op->getResultTypes());
   });
-  target.addDynamicallyLegalOp<mlir::omp::AtomicReadOp,
-                               mlir::omp::AtomicWriteOp, mlir::omp::FlushOp,
-                               mlir::omp::ThreadprivateOp, mlir::omp::YieldOp,
-                               mlir::omp::EnterDataOp, mlir::omp::ExitDataOp>(
+  target.addDynamicallyLegalOp<
+      mlir::omp::AtomicReadOp, mlir::omp::AtomicWriteOp, mlir::omp::FlushOp,
+      mlir::omp::ThreadprivateOp, mlir::omp::YieldOp, mlir::omp::EnterDataOp,
+      mlir::omp::ExitDataOp, mlir::omp::DataBoundsOp, mlir::omp::MapEntryOp>(
       [&](Operation *op) {
         return typeConverter.isLegal(op->getOperandTypes()) &&
                typeConverter.isLegal(op->getResultTypes());
@@ -243,6 +243,8 @@ void mlir::populateOpenMPToLLVMConversionPatterns(LLVMTypeConverter &converter,
       RegionOpWithVarOperandsConversion<omp::AtomicUpdateOp>,
       RegionLessOpWithVarOperandsConversion<omp::FlushOp>,
       RegionLessOpWithVarOperandsConversion<omp::ThreadprivateOp>,
+      RegionLessOpConversion<omp::DataBoundsOp>,
+      RegionLessOpConversion<omp::MapEntryOp>,
       RegionLessOpConversion<omp::YieldOp>,
       RegionLessOpConversion<omp::EnterDataOp>,
       RegionLessOpConversion<omp::ExitDataOp>>(converter);
