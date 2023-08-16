@@ -2111,40 +2111,18 @@ convertOmpTarget(Operation &opInst, llvm::IRBuilderBase &builder,
   if (!targetOpSupported(opInst))
     return failure();
 
-  llvm::errs() << "I get to convertomptarget \n";
   auto targetOp = cast<omp::TargetOp>(opInst);
   auto &targetRegion = targetOp.getRegion();
 
   SmallVector<Value> mapOperands = targetOp.getMapOperands();
   LogicalResult bodyGenStatus = success();
 
-  // llvm::errs() << "Module Op Start \n\n\n\n";
-  // opInst.getParentOfType<ModuleOp>().dump();
-  // llvm::errs() << "Module Op End \n\n\n\n";
-
   using InsertPointTy = llvm::OpenMPIRBuilder::InsertPointTy;
   auto bodyCB = [&](InsertPointTy allocaIP,
                     InsertPointTy codeGenIP) -> InsertPointTy {
     builder.restoreIP(codeGenIP);
-    // llvm::errs() << "\n\n\n\n Start of initial Module dump \n\n\n\n";
-    // moduleTranslation.getLLVMModule()->dump();
-    // llvm::errs() << "\n\n\n\n End of initial Module dump \n\n\n\n";
-
-    // it could be the fact that we need to remap the global... like i did
-    // before, but need to find out why it works for one but not the other
-    // globalsMapping && valuesMapping are likely of interest and forgetMapping
-    // may help to reset the globalmapping perhaps, but it'd require forgetting
-    // the map for everything in the module, so not likely going to help for a
-    // small case but perhaps we can add a forgetGlobalMapping function to then
-    // reinsert, although it's more likely it'd need to go into the valuemapping
-    // rather than global mapping in the case of our current example.. but the
-    // get elementptr is still the same value/op, so unsure why it's different
     llvm::BasicBlock *exitBlock = convertOmpOpRegions(
         targetRegion, "omp.target", builder, moduleTranslation, bodyGenStatus);
-
-    // llvm::errs() << "\n\n\n\n Start of final Module dump \n\n\n\n";
-    // moduleTranslation.getLLVMModule()->dump();
-    // llvm::errs() << "\n\n\n\n End of final Module dump \n\n\n\n";
     builder.SetInsertPoint(exitBlock);
     return builder.saveIP();
   };
