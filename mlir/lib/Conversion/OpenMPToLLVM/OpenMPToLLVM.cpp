@@ -230,8 +230,15 @@ void mlir::configureOpenMPToLLVMConversionLegality(
 
 void mlir::populateOpenMPToLLVMConversionPatterns(LLVMTypeConverter &converter,
                                                   RewritePatternSet &patterns) {
-  patterns.add<
-      AtomicReadOpConversion, ReductionOpConversion,
+  // This type is allowed when converting OpenMP to LLVM Dialect, it carries
+  // bounds information for map clauses and the operation and type are
+  // discarded on lowering to LLVM-IR from the OpenMP dialect. 
+  converter.addConversion(
+      [&](omp::DataBoundsType type) -> Type { return type; });
+
+  patterns.add < AtomicReadOpConversion, ReductionOpConversion,
+      RegionLessOpWithVarOperandsConversion<omp::DataBoundsOp>,
+      RegionLessOpWithVarOperandsConversion<omp::MapEntryOp>,
       ReductionDeclareOpConversion, RegionOpConversion<omp::CriticalOp>,
       RegionOpConversion<omp::MasterOp>, ReductionOpConversion,
       RegionOpConversion<omp::ParallelOp>, RegionOpConversion<omp::WsLoopOp>,

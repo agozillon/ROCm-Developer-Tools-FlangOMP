@@ -28,6 +28,7 @@ def OpenMP_Dialect : Dialect {
   let cppNamespace = "::mlir::omp";
   let dependentDialects = ["::mlir::LLVM::LLVMDialect, ::mlir::func::FuncDialect"];
   let useDefaultAttributePrinterParser = 1;
+  let useDefaultTypePrinterParser = 1;
   let usePropertiesForAttributes = 1;
 }
 
@@ -1034,6 +1035,7 @@ def DataBoundsType : OpenMP_Type<"DataBounds", "data_bounds_ty"> {
   let summary = "Type for representing omp data clause bounds information";
 }
 
+
 def DataBoundsOp : OpenMP_Op<"bounds",
     [AttrSizedOperandSegments, NoMemoryEffect]> {
   let summary = "Represents normalized bounds information for map and data clauses.";
@@ -1092,6 +1094,18 @@ def DataBoundsOp : OpenMP_Op<"bounds",
     ) attr-dict
   }];
 
+  let extraClassDeclaration = [{
+    /// The number of variable operands.
+    unsigned getNumVariableOperands() {
+      return getNumOperands();
+    }
+
+    /// The i-th variable operand passed.
+    Value getVariableOperand(unsigned i) {
+      return getOperands()[i];
+    }
+  }];
+
   let hasVerifier = 1;
 }
 
@@ -1123,6 +1137,18 @@ def MapEntryOp : OpenMP_Op<"map_entry", [AttrSizedOperandSegments]> {
         `var_ptr_ptr` `(` $var_ptr_ptr `:` type($var_ptr_ptr) `)`
       | `bounds` `(` $bounds `)`
     ) `->` type($omp_ptr) attr-dict
+  }];
+
+  let extraClassDeclaration = [{
+    /// The number of variable operands.
+    unsigned getNumVariableOperands() {
+      return getNumOperands();
+    }
+
+    /// The i-th variable operand passed.
+    Value getVariableOperand(unsigned i) {
+      return getOperands()[i];
+    }
   }];
 }
 
