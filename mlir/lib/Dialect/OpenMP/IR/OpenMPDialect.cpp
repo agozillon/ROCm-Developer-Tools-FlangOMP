@@ -675,7 +675,7 @@ uint64_t mapTypeToBitFlag(uint64_t value,
 }
 
 static void printMapType(OpAsmPrinter &p, Operation *op, IntegerAttr mapType) {
-  uint64_t mapTypeBits = mapType.getUInt();
+  uint64_t mapTypeBits = mapType.getInt();
 
   bool always = mapTypeToBitFlag(
       mapTypeBits, llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_ALWAYS);
