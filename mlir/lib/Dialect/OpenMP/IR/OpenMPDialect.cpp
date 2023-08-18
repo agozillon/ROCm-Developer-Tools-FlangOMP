@@ -665,15 +665,123 @@ static LogicalResult verifySynchronizationHint(Operation *op, uint64_t hint) {
 // Builder, Parser, printer and verifier for Target
 //===----------------------------------------------------------------------===//
 
+// Helper function to get bitwise AND of `value` and 'flag'
+uint64_t mapTypeToBitFlag(uint64_t value,
+                          llvm::omp::OpenMPOffloadMappingFlags flag) {
+  return value &
+         static_cast<
+             std::underlying_type_t<llvm::omp::OpenMPOffloadMappingFlags>>(
+             flag);
+}
+
+static void printMapType(OpAsmPrinter &p, Operation *op, IntegerAttr mapType) {
+  uint64_t mapTypeBits = mapType.getUInt();
+
+  bool always = mapTypeToBitFlag(
+      mapTypeBits, llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_ALWAYS);
+  bool close = mapTypeToBitFlag(
+      mapTypeBits, llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_CLOSE);
+  bool present = mapTypeToBitFlag(
+      mapTypeBits, llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_PRESENT);
+
+  bool to = mapTypeToBitFlag(mapTypeBits,
+                             llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_TO);
+  bool from = mapTypeToBitFlag(
+      mapTypeBits, llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_FROM);
+  bool del = mapTypeToBitFlag(
+      mapTypeBits, llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_DELETE);
+
+  std::string typeModStr, typeStr;
+  llvm::raw_string_ostream typeMod(typeModStr), type(typeStr);
+
+  if (always)
+    typeMod << "always, ";
+  if (close)
+    typeMod << "close, ";
+  if (present)
+    typeMod << "present, ";
+
+  if (to)
+    type << "to";
+  if (from)
+    type << "from";
+  if (del)
+    type << "delete";
+  if (type.str().empty())
+    type << (isa<ExitDataOp>(op) ? "release" : "alloc");
+
+  p << typeMod.str() << type.str();
+}
+
+static ParseResult parseMapType(OpAsmParser &parser, IntegerAttr &mapType) {
+  StringRef mapTypeKey;
+  llvm::omp::OpenMPOffloadMappingFlags mapTypeBits;
+  if (parser.parseKeyword(&mapTypeKey))
+    return failure();
+
+  if (mapTypeKey == "always")
+    mapTypeBits |= llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_ALWAYS;
+  if (mapTypeKey == "close")
+    mapTypeBits |= llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_CLOSE;
+  if (mapTypeKey == "present")
+    mapTypeBits |= llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_PRESENT;
+
+  if (mapTypeKey == "to")
+    mapTypeBits |= llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_TO;
+  if (mapTypeKey == "from")
+    mapTypeBits |= llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_FROM;
+  if (mapTypeKey == "tofrom")
+    mapTypeBits |= llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_TO |
+                   llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_FROM;
+  if (mapTypeKey == "delete")
+    mapTypeBits |= llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_DELETE;
+
+  mapType = parser.getBuilder().getIntegerAttr(
+      parser.getBuilder().getI64Type(),
+      static_cast<std::underlying_type_t<llvm::omp::OpenMPOffloadMappingFlags>>(
+          mapTypeBits));
+
+  return success();
+}
+
+static void printCaptureType(OpAsmPrinter &p, Operation *op,
+                             VariableCaptureKindAttr mapCaptureType) {
+  std::string typeCapStr;
+  llvm::raw_string_ostream typeCap(typeCapStr);
+  if (mapCaptureType.getValue() == mlir::omp::VariableCaptureKind::ByRef)
+    typeCap << "ByRef";
+  if (mapCaptureType.getValue() == mlir::omp::VariableCaptureKind::ByCopy)
+    typeCap << "ByCopy";
+  if (mapCaptureType.getValue() == mlir::omp::VariableCaptureKind::VLAType)
+    typeCap << "VLAType";
+  if (mapCaptureType.getValue() == mlir::omp::VariableCaptureKind::This)
+    typeCap << "This";
+  p << typeCap.str();
+}
+
+static ParseResult parseCaptureType(OpAsmParser &parser,
+                                    VariableCaptureKindAttr &mapCapture) {
+  StringRef mapCaptureKey;
+  if (parser.parseKeyword(&mapCaptureKey))
+    return failure();
+
+  if (mapCaptureKey == "This")
+    mapCapture = mlir::omp::VariableCaptureKindAttr::get(
+        parser.getContext(), mlir::omp::VariableCaptureKind::This);
+  if (mapCaptureKey == "ByRef")
+    mapCapture = mlir::omp::VariableCaptureKindAttr::get(
+        parser.getContext(), mlir::omp::VariableCaptureKind::ByRef);
+  if (mapCaptureKey == "ByCopy")
+    mapCapture = mlir::omp::VariableCaptureKindAttr::get(
+        parser.getContext(), mlir::omp::VariableCaptureKind::ByCopy);
+  if (mapCaptureKey == "VLAType")
+    mapCapture = mlir::omp::VariableCaptureKindAttr::get(
+        parser.getContext(), mlir::omp::VariableCaptureKind::VLAType);
+
+  return success();
+}
+
 static LogicalResult verifyMapClause(Operation *op, OperandRange mapOperands) {
-  // Helper function to get bitwise AND of `value` and 'flag'
-  auto bitAnd = [](uint64_t value,
-                   llvm::omp::OpenMPOffloadMappingFlags flag) -> bool {
-    return value &
-           static_cast<
-               std::underlying_type_t<llvm::omp::OpenMPOffloadMappingFlags>>(
-               flag);
-  };
 
   for (auto mapOp : mapOperands) {
     if (!mapOp.getDefiningOp())
@@ -690,12 +798,12 @@ static LogicalResult verifyMapClause(Operation *op, OperandRange mapOperands) {
 
       uint64_t mapTypeBits = mapEntryOp.getMapType().value();
 
-      bool to =
-          bitAnd(mapTypeBits, llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_TO);
-      bool from = bitAnd(mapTypeBits,
-                         llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_FROM);
-      bool del = bitAnd(mapTypeBits,
-                        llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_DELETE);
+      bool to = mapTypeToBitFlag(
+          mapTypeBits, llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_TO);
+      bool from = mapTypeToBitFlag(
+          mapTypeBits, llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_FROM);
+      bool del = mapTypeToBitFlag(
+          mapTypeBits, llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_DELETE);
 
       if ((isa<DataOp>(op) || isa<TargetOp>(op)) && del)
         return emitError(op->getLoc(),

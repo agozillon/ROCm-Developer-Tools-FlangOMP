@@ -1127,7 +1127,10 @@ def MapEntryOp : OpenMP_Op<"map_entry", [AttrSizedOperandSegments]> {
     - `bounds`: Used when copying just slice of array or array's bounds are not
     encoded in type. They are in rank order where rank 0 is inner-most dimension.
     - `implicit`: specified explicitly in a map clause or captured implicitly by 
-      being used in a target region with no map or other data mapping construct
+      being used in a target region with no map or other data mapping construct.
+    - 'map_type': OpenMP map type for this map capture, for example: from, to and always.
+    - 'map_capture_type': Capture type for the variable e.g. byref, byvalue, byvla this 
+       can affect lowering.  
     - `name`: Holds the name of variable as specified in user clause (including bounds).
   }];
 
@@ -1135,6 +1138,8 @@ def MapEntryOp : OpenMP_Op<"map_entry", [AttrSizedOperandSegments]> {
     `var_ptr` `(` $var_ptr `:` type($var_ptr) `)`
     oilist(
         `var_ptr_ptr` `(` $var_ptr_ptr `:` type($var_ptr_ptr) `)`
+      | `mapping` `(` custom<MapType>($map_type) `)`
+      | `capture` `(` custom<CaptureType>($map_capture_type) `)`
       | `bounds` `(` $bounds `)`
     ) `->` type($omp_ptr) attr-dict
   }];
@@ -1340,19 +1345,6 @@ def TargetOp : OpenMP_Op<"target",[AttrSizedOperandSegments]> {
     | `nowait` $nowait
     ) $region attr-dict
   }];
-
-  let extraClassDeclaration = [{
-    /// The number of variable operands.
-    unsigned getNumVariableOperands() {
-      return getMapOperands().size();
-    }
-
-    /// The i-th variable operand passed.
-    Value getVariableOperand(unsigned i) {
-      return getMapOperands()[i];
-    }
-  }];
-
 
   let hasVerifier = 1;
 }
