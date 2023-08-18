@@ -42,6 +42,27 @@ class OMPEarlyOutliningPass
     return false;
   }
 
+  // Primarily used for cloning bounds, but likely a little more generically
+  // useable, however, it only handles values/operations with a single result
+  // (for anything it clones, the first result will be the thing inserted)
+  // and does not attempt to clone regions, just operands.
+  // NOTE: Results in duplication of some values that would otherwise be
+  // a single SSA value shared between operations, however, subsequent
+  // optimisation passes clean this up and these values as they're used
+  // just now are eventually discarded on further lowering.
+  mlir::Operation *cloneBoundArgAndChildren(mlir::OpBuilder &builder,
+                                            mlir::Operation *op) {
+    mlir::IRMapping valueMap;
+
+    // Remap the operands.
+    for (auto opValue : op->getOperands())
+      valueMap.map(opValue,
+                   cloneBoundArgAndChildren(builder, opValue.getDefiningOp())
+                       ->getResult(0));
+
+    return builder.clone(*op, valueMap);
+  }
+
   mlir::func::FuncOp outlineTargetOp(mlir::OpBuilder &builder,
                                      mlir::omp::TargetOp &targetOp,
                                      mlir::func::FuncOp &parentFunc,
@@ -52,13 +73,13 @@ class OMPEarlyOutliningPass
     // operands (or just the map arguments) and perhaps refactor this function
     // a little.
     // Collect inputs
-    llvm::SetVector<mlir::Value> inputs;    
+    llvm::SetVector<mlir::Value> inputs;
     mlir::Region &targetRegion = targetOp.getRegion();
     mlir::getUsedValuesDefinedAbove(targetRegion, inputs);
 
     // filter out declareTarget and map entries which are specially handled
     // at the moment, so we do not wish these to end up as function arguments
-    // which would just be more noise in the IR. 
+    // which would just be more noise in the IR.
     for (auto value : inputs)
       if (mlir::isa<mlir::omp::MapEntryOp>(value.getDefiningOp())
           || isDeclareTargetOp(value.getDefiningOp()))
@@ -116,25 +137,36 @@ class OMPEarlyOutliningPass
                   mapEntryBound.getUpperBound().getDefiningOp())
                 boundMap.map(
                     mapEntryBound.getUpperBound(),
-                    builder.clone(*mapEntryBound.getUpperBound().getDefiningOp())
+                    cloneBoundArgAndChildren(
+                        builder, mapEntryBound.getUpperBound().getDefiningOp())
                         ->getResult(0));
               if (mapEntryBound.getLowerBound() &&
                   mapEntryBound.getLowerBound().getDefiningOp())
                 boundMap.map(
                     mapEntryBound.getLowerBound(),
-                    builder.clone(*mapEntryBound.getLowerBound().getDefiningOp())
+                    cloneBoundArgAndChildren(
+                        builder, mapEntryBound.getLowerBound().getDefiningOp())
                         ->getResult(0));
               if (mapEntryBound.getStride() &&
                   mapEntryBound.getStride().getDefiningOp())
                 boundMap.map(
                     mapEntryBound.getStride(),
-                    builder.clone(*mapEntryBound.getStride().getDefiningOp())
+                    cloneBoundArgAndChildren(
+                        builder, mapEntryBound.getStride().getDefiningOp())
                         ->getResult(0));
               if (mapEntryBound.getStartIdx() &&
                   mapEntryBound.getStartIdx().getDefiningOp())
                 boundMap.map(
                     mapEntryBound.getStartIdx(),
-                    builder.clone(*mapEntryBound.getStartIdx().getDefiningOp())
+                    cloneBoundArgAndChildren(
+                        builder, mapEntryBound.getStartIdx().getDefiningOp())
+                        ->getResult(0));
+              if (mapEntryBound.getExtent() &&
+                  mapEntryBound.getExtent().getDefiningOp())
+                boundMap.map(
+                    mapEntryBound.getExtent(),
+                    cloneBoundArgAndChildren(
+                        builder, mapEntryBound.getExtent().getDefiningOp())
                         ->getResult(0));
               mapEntryMap.map(
                   bound, builder.clone(*mapEntryBound, boundMap)->getResult(0));
