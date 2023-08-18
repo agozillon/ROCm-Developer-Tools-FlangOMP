@@ -715,7 +715,8 @@ static void printMapType(OpAsmPrinter &p, Operation *op, IntegerAttr mapType) {
 
 static ParseResult parseMapType(OpAsmParser &parser, IntegerAttr &mapType) {
   StringRef mapTypeKey;
-  llvm::omp::OpenMPOffloadMappingFlags mapTypeBits;
+  llvm::omp::OpenMPOffloadMappingFlags mapTypeBits =
+      llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_NONE;
   auto parseMap = [&]() -> ParseResult {
     if (parser.parseKeyword(&mapTypeKey))
       return failure();
@@ -733,7 +734,7 @@ static ParseResult parseMapType(OpAsmParser &parser, IntegerAttr &mapType) {
       mapTypeBits |= llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_FROM;
     if (mapTypeKey == "tofrom")
       mapTypeBits |= llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_TO |
-                    llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_FROM;
+                     llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_FROM;
     if (mapTypeKey == "delete")
       mapTypeBits |= llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_DELETE;
 
@@ -817,8 +818,7 @@ static LogicalResult verifyMapClause(Operation *op, OperandRange mapOperands) {
                          "to, from, tofrom and alloc map types are permitted");
 
       if (isa<EnterDataOp>(op) && (from || del))
-        return emitError(op->getLoc(),
-                           "to and alloc map types are permitted");
+        return emitError(op->getLoc(), "to and alloc map types are permitted");
 
       if (isa<ExitDataOp>(op) && to)
         return emitError(op->getLoc(),
