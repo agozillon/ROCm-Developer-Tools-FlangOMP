@@ -716,25 +716,32 @@ static void printMapType(OpAsmPrinter &p, Operation *op, IntegerAttr mapType) {
 static ParseResult parseMapType(OpAsmParser &parser, IntegerAttr &mapType) {
   StringRef mapTypeKey;
   llvm::omp::OpenMPOffloadMappingFlags mapTypeBits;
-  if (parser.parseKeyword(&mapTypeKey))
+  auto parseMap = [&]() -> ParseResult {
+    if (parser.parseKeyword(&mapTypeKey))
+      return failure();
+
+    if (mapTypeKey == "always")
+      mapTypeBits |= llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_ALWAYS;
+    if (mapTypeKey == "close")
+      mapTypeBits |= llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_CLOSE;
+    if (mapTypeKey == "present")
+      mapTypeBits |= llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_PRESENT;
+
+    if (mapTypeKey == "to")
+      mapTypeBits |= llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_TO;
+    if (mapTypeKey == "from")
+      mapTypeBits |= llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_FROM;
+    if (mapTypeKey == "tofrom")
+      mapTypeBits |= llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_TO |
+                    llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_FROM;
+    if (mapTypeKey == "delete")
+      mapTypeBits |= llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_DELETE;
+
+    return success();
+  };
+
+  if (parser.parseCommaSeparatedList(parseMap))
     return failure();
-
-  if (mapTypeKey == "always")
-    mapTypeBits |= llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_ALWAYS;
-  if (mapTypeKey == "close")
-    mapTypeBits |= llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_CLOSE;
-  if (mapTypeKey == "present")
-    mapTypeBits |= llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_PRESENT;
-
-  if (mapTypeKey == "to")
-    mapTypeBits |= llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_TO;
-  if (mapTypeKey == "from")
-    mapTypeBits |= llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_FROM;
-  if (mapTypeKey == "tofrom")
-    mapTypeBits |= llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_TO |
-                   llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_FROM;
-  if (mapTypeKey == "delete")
-    mapTypeBits |= llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_DELETE;
 
   mapType = parser.getBuilder().getIntegerAttr(
       parser.getBuilder().getI64Type(),
