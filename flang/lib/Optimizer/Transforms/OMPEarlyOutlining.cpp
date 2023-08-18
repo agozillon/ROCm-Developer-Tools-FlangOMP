@@ -81,128 +81,132 @@ class OMPEarlyOutliningPass
     // at the moment, so we do not wish these to end up as function arguments
     // which would just be more noise in the IR.
     for (auto value : inputs)
-      if (mlir::isa<mlir::omp::MapEntryOp>(value.getDefiningOp())
-          || isDeclareTargetOp(value.getDefiningOp()))
-        inputs.remove(value);
+      if (value.getDefiningOp())
+        if (mlir::isa<mlir::omp::MapEntryOp>(value.getDefiningOp()) ||
+            isDeclareTargetOp(value.getDefiningOp()))
+          inputs.remove(value);
 
-      // Create new function and initialize
-      mlir::FunctionType funcType = builder.getFunctionType(
-          mlir::TypeRange(inputs.getArrayRef()), mlir::TypeRange());
-      std::string parentName(parentFunc.getName());
-      std::string funcName = getOutlinedFnName(parentName, count);
-      auto loc = targetOp.getLoc();
-      mlir::func::FuncOp newFunc =
-          mlir::func::FuncOp::create(loc, funcName, funcType);
-      mlir::Block *entryBlock = newFunc.addEntryBlock();
-      builder.setInsertionPointToStart(entryBlock);
-      auto newInputs = entryBlock->getArguments();
+    // Create new function and initialize
+    mlir::FunctionType funcType = builder.getFunctionType(
+        mlir::TypeRange(inputs.getArrayRef()), mlir::TypeRange());
+    std::string parentName(parentFunc.getName());
+    std::string funcName = getOutlinedFnName(parentName, count);
+    auto loc = targetOp.getLoc();
+    mlir::func::FuncOp newFunc =
+        mlir::func::FuncOp::create(loc, funcName, funcType);
+    mlir::Block *entryBlock = newFunc.addEntryBlock();
+    builder.setInsertionPointToStart(entryBlock);
+    auto newInputs = entryBlock->getArguments();
 
-      // Set the declare target information, the outlined function
-      // is always a host function.
-      if (auto parentDTOp = llvm::dyn_cast<mlir::omp::DeclareTargetInterface>(
-              parentFunc.getOperation()))
-        if (auto newDTOp = llvm::dyn_cast<mlir::omp::DeclareTargetInterface>(
+    // Set the declare target information, the outlined function
+    // is always a host function.
+    if (auto parentDTOp = llvm::dyn_cast<mlir::omp::DeclareTargetInterface>(
+            parentFunc.getOperation()))
+      if (auto newDTOp = llvm::dyn_cast<mlir::omp::DeclareTargetInterface>(
+              newFunc.getOperation()))
+        newDTOp.setDeclareTarget(mlir::omp::DeclareTargetDeviceType::host,
+                                 parentDTOp.getDeclareTargetCaptureClause());
+
+    // Set the early outlining interface parent name
+    if (auto earlyOutlineOp =
+            llvm::dyn_cast<mlir::omp::EarlyOutliningInterface>(
                 newFunc.getOperation()))
-          newDTOp.setDeclareTarget(mlir::omp::DeclareTargetDeviceType::host,
-                                   parentDTOp.getDeclareTargetCaptureClause());
+      earlyOutlineOp.setParentName(parentName);
 
-      // Set the early outlining interface parent name
-      if (auto earlyOutlineOp =
-              llvm::dyn_cast<mlir::omp::EarlyOutliningInterface>(
-                  newFunc.getOperation()))
-        earlyOutlineOp.setParentName(parentName);
+    // The value map for the newly generated Target Operation, we must
+    // remap most of the input.
+    mlir::IRMapping valueMap;
 
-      // The value map for the newly generated Target Operation, we must
-      // remap most of the input.
-      mlir::IRMapping valueMap;
-
-      // Special handling for map, declare target and regular map variables
-      // are handled slightly differently for the moment, declare target has
-      // its addressOfOp cloned over, whereas we skip it for the regular map
-      // variables. We need knowledge of which global is linked to the map
-      // operation for declare target, whereas we aren't bothered for the 
-      // regular map variables for the moment. We could treat both the same,
-      // however, cloning across the minimum for the moment to avoid 
-      // optimisations breaking segments of the lowering seems prudent as this
-      // was the original intent of the pass.
-      for (auto oper : targetOp.getOperation()->getOperands()) {
-        if (auto mapEntry =
-                mlir::dyn_cast<mlir::omp::MapEntryOp>(oper.getDefiningOp())) {
-          mlir::IRMapping mapEntryMap;
-          for (auto bound : mapEntry.getBounds()) {
-            if (auto mapEntryBound = mlir::dyn_cast<mlir::omp::DataBoundsOp>(
-                    bound.getDefiningOp())) {
-              mlir::IRMapping boundMap;
-              if (mapEntryBound.getUpperBound() &&
-                  mapEntryBound.getUpperBound().getDefiningOp())
-                boundMap.map(
-                    mapEntryBound.getUpperBound(),
-                    cloneBoundArgAndChildren(
-                        builder, mapEntryBound.getUpperBound().getDefiningOp())
-                        ->getResult(0));
-              if (mapEntryBound.getLowerBound() &&
-                  mapEntryBound.getLowerBound().getDefiningOp())
-                boundMap.map(
-                    mapEntryBound.getLowerBound(),
-                    cloneBoundArgAndChildren(
-                        builder, mapEntryBound.getLowerBound().getDefiningOp())
-                        ->getResult(0));
-              if (mapEntryBound.getStride() &&
-                  mapEntryBound.getStride().getDefiningOp())
-                boundMap.map(
-                    mapEntryBound.getStride(),
-                    cloneBoundArgAndChildren(
-                        builder, mapEntryBound.getStride().getDefiningOp())
-                        ->getResult(0));
-              if (mapEntryBound.getStartIdx() &&
-                  mapEntryBound.getStartIdx().getDefiningOp())
-                boundMap.map(
-                    mapEntryBound.getStartIdx(),
-                    cloneBoundArgAndChildren(
-                        builder, mapEntryBound.getStartIdx().getDefiningOp())
-                        ->getResult(0));
-              if (mapEntryBound.getExtent() &&
-                  mapEntryBound.getExtent().getDefiningOp())
-                boundMap.map(
-                    mapEntryBound.getExtent(),
-                    cloneBoundArgAndChildren(
-                        builder, mapEntryBound.getExtent().getDefiningOp())
-                        ->getResult(0));
-              mapEntryMap.map(
-                  bound, builder.clone(*mapEntryBound, boundMap)->getResult(0));
-            }
+    // Special handling for map, declare target and regular map variables
+    // are handled slightly differently for the moment, declare target has
+    // its addressOfOp cloned over, whereas we skip it for the regular map
+    // variables. We need knowledge of which global is linked to the map
+    // operation for declare target, whereas we aren't bothered for the
+    // regular map variables for the moment. We could treat both the same,
+    // however, cloning across the minimum for the moment to avoid
+    // optimisations breaking segments of the lowering seems prudent as this
+    // was the original intent of the pass.
+    for (auto oper : targetOp.getOperation()->getOperands()) {
+      if (auto mapEntry =
+              mlir::dyn_cast<mlir::omp::MapEntryOp>(oper.getDefiningOp())) {
+        mlir::IRMapping mapEntryMap;
+        for (auto bound : mapEntry.getBounds()) {
+          if (auto mapEntryBound = mlir::dyn_cast<mlir::omp::DataBoundsOp>(
+                  bound.getDefiningOp())) {
+            mlir::IRMapping boundMap;
+            if (mapEntryBound.getUpperBound() &&
+                mapEntryBound.getUpperBound().getDefiningOp())
+              boundMap.map(
+                  mapEntryBound.getUpperBound(),
+                  cloneBoundArgAndChildren(
+                      builder, mapEntryBound.getUpperBound().getDefiningOp())
+                      ->getResult(0));
+            if (mapEntryBound.getLowerBound() &&
+                mapEntryBound.getLowerBound().getDefiningOp())
+              boundMap.map(
+                  mapEntryBound.getLowerBound(),
+                  cloneBoundArgAndChildren(
+                      builder, mapEntryBound.getLowerBound().getDefiningOp())
+                      ->getResult(0));
+            if (mapEntryBound.getStride() &&
+                mapEntryBound.getStride().getDefiningOp())
+              boundMap.map(
+                  mapEntryBound.getStride(),
+                  cloneBoundArgAndChildren(
+                      builder, mapEntryBound.getStride().getDefiningOp())
+                      ->getResult(0));
+            if (mapEntryBound.getStartIdx() &&
+                mapEntryBound.getStartIdx().getDefiningOp())
+              boundMap.map(
+                  mapEntryBound.getStartIdx(),
+                  cloneBoundArgAndChildren(
+                      builder, mapEntryBound.getStartIdx().getDefiningOp())
+                      ->getResult(0));
+            if (mapEntryBound.getExtent() &&
+                mapEntryBound.getExtent().getDefiningOp())
+              boundMap.map(
+                  mapEntryBound.getExtent(),
+                  cloneBoundArgAndChildren(
+                      builder, mapEntryBound.getExtent().getDefiningOp())
+                      ->getResult(0));
+            mapEntryMap.map(
+                bound, builder.clone(*mapEntryBound, boundMap)->getResult(0));
           }
-      
-          if (isDeclareTargetOp(mapEntry.getVarPtr().getDefiningOp())) {
-            fir::AddrOfOp addrOp = mlir::dyn_cast<fir::AddrOfOp>(
-                mapEntry.getVarPtr().getDefiningOp());
-            mlir::Value newV = builder.clone(*addrOp)->getResult(0);
-            mapEntryMap.map(mapEntry.getVarPtr(), newV);
-            valueMap.map(addrOp, newV);
-          } else {
-            for (auto inArg : llvm::zip(inputs, newInputs))
-              if (mapEntry.getVarPtr() == std::get<0>(inArg))
-                mapEntryMap.map(mapEntry.getVarPtr(), std::get<1>(inArg));
-          }
-
-          valueMap.map(mapEntry,
-                       builder.clone(*mapEntry.getOperation(), mapEntryMap)
-                           ->getResult(0));
         }
+
+        if (mapEntry.getVarPtr().getDefiningOp() &&
+            isDeclareTargetOp(mapEntry.getVarPtr().getDefiningOp())) {
+          // llvm::errs() << "5.1.1 \n";
+          fir::AddrOfOp addrOp = mlir::dyn_cast<fir::AddrOfOp>(
+              mapEntry.getVarPtr().getDefiningOp());
+          mlir::Value newV = builder.clone(*addrOp)->getResult(0);
+          mapEntryMap.map(mapEntry.getVarPtr(), newV);
+          valueMap.map(addrOp, newV);
+        } else {
+          for (auto inArg : llvm::zip(inputs, newInputs)) {
+            if (mapEntry.getVarPtr() == std::get<0>(inArg))
+              mapEntryMap.map(mapEntry.getVarPtr(), std::get<1>(inArg));
+          }
+        }
+
+        valueMap.map(
+            mapEntry,
+            builder.clone(*mapEntry.getOperation(), mapEntryMap)->getResult(0));
       }
-
-      // Create input map from inputs to function parameters.
-      for (auto inArg : llvm::zip(inputs, newInputs))
-        valueMap.map(std::get<0>(inArg), std::get<1>(inArg));
-      
-      // Clone the target op into the new function
-      builder.clone(*(targetOp.getOperation()), valueMap);
-
-      // Create return op
-      builder.create<mlir::func::ReturnOp>(loc);
-
-      return newFunc;
     }
+
+    // Create input map from inputs to function parameters.
+    for (auto inArg : llvm::zip(inputs, newInputs))
+      valueMap.map(std::get<0>(inArg), std::get<1>(inArg));
+
+    // Clone the target op into the new function
+    builder.clone(*(targetOp.getOperation()), valueMap);
+
+    // Create return op
+    builder.create<mlir::func::ReturnOp>(loc);
+
+    return newFunc;
+  }
 
   // Returns true if a target region was found int the function.
   bool outlineTargetOps(mlir::OpBuilder &builder,
@@ -228,7 +232,6 @@ class OMPEarlyOutliningPass
     for (auto functionOp :
          llvm::make_early_inc_range(moduleOp.getOps<mlir::func::FuncOp>())) {
       bool outlined = outlineTargetOps(builder, functionOp, moduleOp, newFuncs);
-      
       if (outlined)
         functionOp.erase();
     }
