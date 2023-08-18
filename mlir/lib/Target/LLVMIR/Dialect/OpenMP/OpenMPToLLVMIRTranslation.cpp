@@ -796,7 +796,6 @@ static void collectReductionInfo(
 static LogicalResult
 convertOmpWsLoop(Operation &opInst, llvm::IRBuilderBase &builder,
                  LLVM::ModuleTranslation &moduleTranslation) {
-  llvm::errs() << "1 \n";
   auto loop = cast<omp::WsLoopOp>(opInst);
 
   // TODO: this should be in the op verifier instead.
@@ -816,7 +815,6 @@ convertOmpWsLoop(Operation &opInst, llvm::IRBuilderBase &builder,
         moduleTranslation.lookupValue(loop.getScheduleChunkVar());
     chunk = builder.CreateSExtOrTrunc(chunkVar, ivType);
   }
-  llvm::errs() << "2 \n";
   SmallVector<omp::ReductionDeclareOp> reductionDecls;
   collectReductionDecls(loop, reductionDecls);
   llvm::OpenMPIRBuilder::InsertPointTy allocaIP =
@@ -826,8 +824,6 @@ convertOmpWsLoop(Operation &opInst, llvm::IRBuilderBase &builder,
   DenseMap<Value, llvm::Value *> reductionVariableMap;
   allocReductionVars(loop, builder, moduleTranslation, allocaIP, reductionDecls,
                      privateReductionVariables, reductionVariableMap);
-
-  llvm::errs() << "3 \n";
 
   // Store the mapping between reduction variables and their private copies on
   // ModuleTranslation stack. It can be then recovered when translating
@@ -848,8 +844,6 @@ convertOmpWsLoop(Operation &opInst, llvm::IRBuilderBase &builder,
                                "reduction neutral element declaration region");
     builder.CreateStore(phis[0], privateReductionVariables[i]);
   }
-
-  llvm::errs() << "4 \n";
 
   // Set up the source location value for OpenMP runtime.
   llvm::OpenMPIRBuilder::LocationDescription ompLoc(builder);
@@ -878,8 +872,6 @@ convertOmpWsLoop(Operation &opInst, llvm::IRBuilderBase &builder,
     convertOmpOpRegions(loop.getRegion(), "omp.wsloop.region", builder,
                         moduleTranslation, bodyGenStatus);
   };
-
-  llvm::errs() << "5 \n";
 
   // Delegate actual loop construction to the OpenMP IRBuilder.
   // TODO: this currently assumes WsLoop is semantically similar to SCF loop,
@@ -910,8 +902,6 @@ convertOmpWsLoop(Operation &opInst, llvm::IRBuilderBase &builder,
       return failure();
   }
 
-  llvm::errs() << "6 \n";
-
   // Collapse loops. Store the insertion point because LoopInfos may get
   // invalidated.
   llvm::IRBuilderBase::InsertPoint afterIP = loopInfos.front()->getAfterIP();
@@ -920,14 +910,12 @@ convertOmpWsLoop(Operation &opInst, llvm::IRBuilderBase &builder,
 
   allocaIP = findAllocaInsertPoint(builder, moduleTranslation);
 
-  llvm::errs() << "7 \n";
   // TODO: Handle doacross loops when the ordered clause has a parameter.
   bool isOrdered = loop.getOrderedVal().has_value();
   std::optional<omp::ScheduleModifier> scheduleModifier =
       loop.getScheduleModifier();
   bool isSimd = loop.getSimdModifier();
 
-  llvm::errs() << "8 \n";
   ompBuilder->applyWorkshareLoop(
       ompLoc.DL, loopInfo, allocaIP, !loop.getNowait(),
       convertToScheduleKind(schedule), chunk, isSimd,
@@ -944,17 +932,23 @@ convertOmpWsLoop(Operation &opInst, llvm::IRBuilderBase &builder,
   if (loop.getNumReductionVars() == 0)
     return success();
 
-  llvm::errs() << "9 \n";
   // Create the reduction generators. We need to own them here because
   // ReductionInfo only accepts references to the generators.
   SmallVector<OwningReductionGen> owningReductionGens;
   SmallVector<OwningAtomicReductionGen> owningAtomicReductionGens;
+  for (unsigned i = 0; i < numReductions; ++i) {
+    owningReductionGens.push_back(
+        makeReductionGen(reductionDecls[i], builder, moduleTranslation));
+    owningAtomicReductionGens.push_back(
+        makeAtomicReductionGen(reductionDecls[i], builder, moduleTranslation));
+  }
+
+  // Collect the reduction information.
   SmallVector<llvm::OpenMPIRBuilder::ReductionInfo> reductionInfos;
   collectReductionInfo(loop, builder, moduleTranslation, reductionDecls,
                        owningReductionGens, owningAtomicReductionGens,
                        privateReductionVariables, reductionInfos);
 
-  llvm::errs() << "11 \n";
   // The call to createReductions below expects the block to have a
   // terminator. Create an unreachable instruction to serve as terminator
   // and remove it later.
@@ -969,8 +963,6 @@ convertOmpWsLoop(Operation &opInst, llvm::IRBuilderBase &builder,
       ompBuilder->createBarrier(contInsertPoint, llvm::omp::OMPD_for);
   tempTerminator->eraseFromParent();
   builder.restoreIP(nextInsertionPoint);
-
-  llvm::errs() << "12 \n";
 
   return success();
 }
@@ -2044,7 +2036,7 @@ static void createAlteredByCaptureMap(
       //
       // TODO: Handle N-dimensional array range
       if (!mapOp.getBounds().empty()) {
-        assert(mapOp.getBounds().size() > 1 &&
+        assert(mapOp.getBounds().size() <= 1 &&
                "Only 1-D map bounds are currently supported");
         llvm::SetVector<uint64_t> lbs;
         for (auto bound : mapOp.getBounds()) {
@@ -2063,7 +2055,7 @@ static void createAlteredByCaptureMap(
           // NOTE: 2D GEP required for 1D array boundary it seems
           auto arr = std::vector<llvm::Value *>{builder.getInt64(0),
                                                 builder.getInt64(lbs[0])};
-          operandsPointers[mapOp] =
+          operandsPointers[mapOp.getVarPtr()] =
               builder.CreateInBoundsGEP(type, mapOpValue, arr, "arrayidx");
         }
       }
@@ -2087,7 +2079,7 @@ static void createAlteredByCaptureMap(
         newV = builder.CreateLoad(builder.getInt8PtrTy(), memTempAlloc);
       }
 
-      operandsBasePointers[mapOp] = newV;
+      operandsBasePointers[mapOp.getVarPtr()] = newV;
     } break;
     case llvm::OffloadEntriesInfoManager::OMPTargetVarCaptureKind::
         OMPTargetVarCaptureThis:
@@ -2159,7 +2151,6 @@ convertOmpTarget(Operation &opInst, llvm::IRBuilderBase &builder,
         for (const auto &mapValue : mapOps) {
           auto mapOp =
               mlir::dyn_cast<mlir::omp::MapEntryOp>(mapValue.getDefiningOp());
-
           // We care about the pointee type, not the pointer, however, in
           // certain cases it may just return a pointer or null which is
           // acceptable
@@ -2199,7 +2190,7 @@ convertOmpTarget(Operation &opInst, llvm::IRBuilderBase &builder,
             // TODO: Handle multi-dimensional ranges/array segments, the prior
             // lowering stages should work just fine for it, but need to work
             // out the lowering logic to LLVM IR.
-            assert(mapOp.getBounds().size() > 1 &&
+            assert(mapOp.getBounds().size() <= 1 &&
                    "only 1-D array bounds are supported for now");
             if (ubs.empty() && lbs.empty()) {
               inputSizes.push_back(getSizeInBytes(dl, mapOp.getType()));
@@ -2307,12 +2298,12 @@ convertOmpTarget(Operation &opInst, llvm::IRBuilderBase &builder,
       defaultValThreads, inputs, inputTypes, inputsCaptureKind, genMapInfoCB,
       bodyCB));
 
+  if (moduleTranslation.getOpenMPBuilder()->Config.isTargetDevice())
+    handleDeclareTargetMapVar(mapOperands, moduleTranslation, builder);
+
   // llvm::errs() << "\n\n\n\n s dump after completed createTarget
   // \n\n\n\n"; moduleTranslation.getLLVMModule()->dump(); llvm::errs() <<
   // "\n\n\n\n e dump after completed createTarget \n\n\n\n";
-
-  if (moduleTranslation.getOpenMPBuilder()->Config.isTargetDevice())
-    handleDeclareTargetMapVar(mapOperands, moduleTranslation, builder);
 
   return bodyGenStatus;
 }
