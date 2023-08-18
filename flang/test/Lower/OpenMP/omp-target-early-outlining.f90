@@ -6,7 +6,8 @@
 !CHECK: func.func @_QPtarget_function
 
 !CHECK:  func.func @_QPwrite_index_omp_outline_0(%[[ARG0:.*]]: !fir.ref<i32>) attributes {omp.declare_target = #omp.declaretarget<device_type = (host), capture_clause = (to)>, omp.outline_parent_name = "_QPwrite_index"} {
-!CHECK-NEXT: omp.target  {{.*}} {
+!CHECK-NEXT: %[[MAP_ENTRY0:.*]] = omp.map_entry var_ptr(%[[ARG0]]{{.*}}
+!CHECK-NEXT: omp.target  map(%[[MAP_ENTRY0]]{{.*}} {
 !CHECK: %[[CONSTANT_VALUE_10:.*]] = arith.constant 10 : i32
 !CHECK: fir.store %[[CONSTANT_VALUE_10]] to %[[ARG0]] : !fir.ref<i32>
 !CHECK: omp.terminator
@@ -14,7 +15,8 @@
 !CHECK-NEXT: return
 
 !CHECK:  func.func @_QPwrite_index_omp_outline_1(%[[ARG1:.*]]: !fir.ref<i32>) attributes {omp.declare_target = #omp.declaretarget<device_type = (host), capture_clause = (to)>, omp.outline_parent_name = "_QPwrite_index"} {
-!CHECK-NEXT: omp.target  {{.*}} {
+!CHECK-NEXT: %[[MAP_ENTRY1:.*]] = omp.map_entry var_ptr(%[[ARG1]]{{.*}}
+!CHECK-NEXT: omp.target  map(%[[MAP_ENTRY1]]{{.*}} {
 !CHECK: %[[CONSTANT_VALUE_20:.*]] = arith.constant 20 : i32
 !CHECK: fir.store %[[CONSTANT_VALUE_20]] to %[[ARG1]] : !fir.ref<i32>
 !CHECK: omp.terminator
