@@ -2301,10 +2301,6 @@ convertOmpTarget(Operation &opInst, llvm::IRBuilderBase &builder,
   if (moduleTranslation.getOpenMPBuilder()->Config.isTargetDevice())
     handleDeclareTargetMapVar(mapOperands, moduleTranslation, builder);
 
-  // llvm::errs() << "\n\n\n\n s dump after completed createTarget
-  // \n\n\n\n"; moduleTranslation.getLLVMModule()->dump(); llvm::errs() <<
-  // "\n\n\n\n e dump after completed createTarget \n\n\n\n";
-
   return bodyGenStatus;
 }
 
