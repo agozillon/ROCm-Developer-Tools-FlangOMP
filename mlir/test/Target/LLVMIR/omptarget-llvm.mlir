@@ -2,10 +2,11 @@
 
 llvm.func @_QPopenmp_target_data() {
   %0 = llvm.mlir.constant(1 : i64) : i64
-  %1 = llvm.alloca %0 x i32 {bindc_name = "i", in_type = i32, operandSegmentSizes = array<i32: 0, 0>, uniq_name = "_QFopenmp_target_dataEi"} : (i64) -> !llvm.ptr<i32>
-  omp.target_data   map((tofrom -> %1 : !llvm.ptr<i32>)) {
-    %2 = llvm.mlir.constant(99 : i32) : i32
-    llvm.store %2, %1 : !llvm.ptr<i32>
+  %1 = llvm.alloca %0 x i32 {bindc_name = "i", in_type = i32, operand_segment_sizes = array<i32: 0, 0>, uniq_name = "_QFopenmp_target_dataEi"} : (i64) -> !llvm.ptr<i32>
+  %2 = omp.map_entry var_ptr(%1 : !llvm.ptr<i32>)   mapping(tofrom) capture(ByRef) -> !llvm.ptr<i32> {name = ""}
+  omp.target_data map(%2 : !llvm.ptr<i32>) {
+    %3 = llvm.mlir.constant(99 : i32) : i32
+    llvm.store %3, %1 : !llvm.ptr<i32>
     omp.terminator
   }
   llvm.return
@@ -38,13 +39,14 @@ llvm.func @_QPopenmp_target_data() {
 // -----
 
 llvm.func @_QPopenmp_target_data_region(%1 : !llvm.ptr<array<1024 x i32>>) {
-  omp.target_data   map((from -> %1 : !llvm.ptr<array<1024 x i32>>)) {
-    %2 = llvm.mlir.constant(99 : i32) : i32
-    %3 = llvm.mlir.constant(1 : i64) : i64
+  %2 = omp.map_entry var_ptr(%1 : !llvm.ptr<array<1024 x i32>>)   mapping(tofrom) capture(ByRef) -> !llvm.ptr<array<1024 x i32>> {name = ""}
+  omp.target_data map(%2 : !llvm.ptr<array<1024 x i32>>) {
+    %3 = llvm.mlir.constant(99 : i32) : i32
     %4 = llvm.mlir.constant(1 : i64) : i64
-    %5 = llvm.mlir.constant(0 : i64) : i64
-    %6 = llvm.getelementptr %1[0, %5] : (!llvm.ptr<array<1024 x i32>>, i64) -> !llvm.ptr<i32>
-    llvm.store %2, %6 : !llvm.ptr<i32>
+    %5 = llvm.mlir.constant(1 : i64) : i64
+    %6 = llvm.mlir.constant(0 : i64) : i64
+    %7 = llvm.getelementptr %1[0, %6] : (!llvm.ptr<array<1024 x i32>>, i64) -> !llvm.ptr<i32>
+    llvm.store %3, %7 : !llvm.ptr<i32>
     omp.terminator
   }
   llvm.return
