@@ -666,7 +666,7 @@ static LogicalResult verifySynchronizationHint(Operation *op, uint64_t hint) {
 //===----------------------------------------------------------------------===//
 
 // Helper function to get bitwise AND of `value` and 'flag'
-uint64_t mapTypeToBitFlag(uint64_t value,
+uint64_t mapTypeToBitFlag(int64_t value,
                           llvm::omp::OpenMPOffloadMappingFlags flag) {
   return value &
          static_cast<
@@ -674,82 +674,101 @@ uint64_t mapTypeToBitFlag(uint64_t value,
              flag);
 }
 
-static void printMapType(OpAsmPrinter &p, Operation *op, IntegerAttr mapType) {
-  uint64_t mapTypeBits = mapType.getInt();
+static ParseResult
+parseMapClause(OpAsmParser &parser,
+               SmallVectorImpl<OpAsmParser::UnresolvedOperand> &mapOperands,
+               SmallVectorImpl<Type> &mapOperandTypes) {
 
-  bool always = mapTypeToBitFlag(
-      mapTypeBits, llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_ALWAYS);
-  bool close = mapTypeToBitFlag(
-      mapTypeBits, llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_CLOSE);
-  bool present = mapTypeToBitFlag(
-      mapTypeBits, llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_PRESENT);
+  OpAsmParser::UnresolvedOperand arg1;
+  Type arg1Type;
+  SmallVector<IntegerAttr> mapTypesVec;
+  llvm::omp::OpenMPOffloadMappingFlags mapTypeBits;
 
-  bool to = mapTypeToBitFlag(mapTypeBits,
-                             llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_TO);
-  bool from = mapTypeToBitFlag(
-      mapTypeBits, llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_FROM);
-  bool del = mapTypeToBitFlag(
-      mapTypeBits, llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_DELETE);
-
-  std::string typeModStr, typeStr;
-  llvm::raw_string_ostream typeMod(typeModStr), type(typeStr);
-
-  if (always)
-    typeMod << "always, ";
-  if (close)
-    typeMod << "close, ";
-  if (present)
-    typeMod << "present, ";
-
-  if (to)
-    type << "to";
-  if (from)
-    type << "from";
-  if (del)
-    type << "delete";
-  if (type.str().empty())
-    type << (isa<ExitDataOp>(op) ? "release" : "alloc");
-
-  p << typeMod.str() << type.str();
-}
-
-static ParseResult parseMapType(OpAsmParser &parser, IntegerAttr &mapType) {
-  StringRef mapTypeKey;
-  llvm::omp::OpenMPOffloadMappingFlags mapTypeBits =
-      llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_NONE;
-  auto parseMap = [&]() -> ParseResult {
-    if (parser.parseKeyword(&mapTypeKey))
+  // This simply verifies the correct keyword is read in, the
+  // keyword itself is stored inside of the operation
+  auto parseTypeAndMod = [&]() -> ParseResult {
+    StringRef mapTypeMod;
+    if (parser.parseKeyword(&mapTypeMod))
       return failure();
 
-    if (mapTypeKey == "always")
-      mapTypeBits |= llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_ALWAYS;
-    if (mapTypeKey == "close")
-      mapTypeBits |= llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_CLOSE;
-    if (mapTypeKey == "present")
-      mapTypeBits |= llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_PRESENT;
+    if (mapTypeMod == "always" || mapTypeMod == "close" ||
+        mapTypeMod == "present" || mapTypeMod == "to" || mapTypeMod == "from" ||
+        mapTypeMod == "tofrom" || mapTypeMod == "delete" ||
+        mapTypeMod == "release" || mapTypeMod == "alloc")
+      return success();
+    return failure();
+  };
 
-    if (mapTypeKey == "to")
-      mapTypeBits |= llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_TO;
-    if (mapTypeKey == "from")
-      mapTypeBits |= llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_FROM;
-    if (mapTypeKey == "tofrom")
-      mapTypeBits |= llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_TO |
-                     llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_FROM;
-    if (mapTypeKey == "delete")
-      mapTypeBits |= llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_DELETE;
+  auto parseMap = [&]() -> ParseResult {
+    mapTypeBits = llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_NONE;
 
+    if (parser.parseLParen() ||
+        parser.parseCommaSeparatedList(parseTypeAndMod) ||
+        parser.parseArrow() || parser.parseOperand(arg1) ||
+        parser.parseColon() || parser.parseType(arg1Type) ||
+        parser.parseRParen())
+      return failure();
+    mapOperands.push_back(arg1);
+    mapOperandTypes.push_back(arg1Type);
     return success();
   };
 
   if (parser.parseCommaSeparatedList(parseMap))
     return failure();
 
-  mapType = parser.getBuilder().getIntegerAttr(
-      parser.getBuilder().getI64Type(),
-      static_cast<std::underlying_type_t<llvm::omp::OpenMPOffloadMappingFlags>>(
-          mapTypeBits));
-
   return success();
+}
+
+static void printMapClause(OpAsmPrinter &p, Operation *op,
+                           OperandRange mapOperands,
+                           TypeRange mapOperandTypes) {
+  for (unsigned i = 0, e = mapOperands.size(); i < e; i++) {
+    int64_t mapTypeBits = 0x00;
+    Value mapOp = mapOperands[i];
+
+    assert(llvm::isa<mlir::omp::MapEntryOp>(mapOp.getDefiningOp()));
+    mapTypeBits = llvm::cast<mlir::omp::MapEntryOp>(mapOp.getDefiningOp())
+                      .getMapTypeAttr()
+                      .getInt();
+
+    bool always = mapTypeToBitFlag(
+        mapTypeBits, llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_ALWAYS);
+    bool close = mapTypeToBitFlag(
+        mapTypeBits, llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_CLOSE);
+    bool present = mapTypeToBitFlag(
+        mapTypeBits, llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_PRESENT);
+
+    bool to = mapTypeToBitFlag(
+        mapTypeBits, llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_TO);
+    bool from = mapTypeToBitFlag(
+        mapTypeBits, llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_FROM);
+    bool del = mapTypeToBitFlag(
+        mapTypeBits, llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_DELETE);
+
+    std::string typeModStr, typeStr;
+    llvm::raw_string_ostream typeMod(typeModStr), type(typeStr);
+
+    if (always)
+      typeMod << "always, ";
+    if (close)
+      typeMod << "close, ";
+    if (present)
+      typeMod << "present, ";
+
+    if (to)
+      type << "to";
+    if (from)
+      type << "from";
+    if (del)
+      type << "delete";
+    if (type.str().empty())
+      type << (isa<ExitDataOp>(op) ? "release" : "alloc");
+
+    p << '(' << typeMod.str() << type.str() << " -> " << mapOp << " : "
+      << mapOp.getType() << ')';
+    if (i + 1 < e)
+      p << ", ";
+  }
 }
 
 static void printCaptureType(OpAsmPrinter &p, Operation *op,

@@ -1128,7 +1128,9 @@ def MapEntryOp : OpenMP_Op<"map_entry", [AttrSizedOperandSegments]> {
     encoded in type. They are in rank order where rank 0 is inner-most dimension.
     - `implicit`: specified explicitly in a map clause or captured implicitly by 
       being used in a target region with no map or other data mapping construct.
-    - 'map_type': OpenMP map type for this map capture, for example: from, to and always.
+    - 'map_type': OpenMP map type for this map capture, for example: from, to and 
+      always, usually mixed in with other map type signifiers such as if it's implicit
+      or a parameter.
     - 'map_capture_type': Capture type for the variable e.g. byref, byvalue, byvla this 
        can affect lowering.  
     - `name`: Holds the name of variable as specified in user clause (including bounds).
@@ -1138,7 +1140,7 @@ def MapEntryOp : OpenMP_Op<"map_entry", [AttrSizedOperandSegments]> {
     `var_ptr` `(` $var_ptr `:` type($var_ptr) `)`
     oilist(
         `var_ptr_ptr` `(` $var_ptr_ptr `:` type($var_ptr_ptr) `)`
-      | `mapping` `(` custom<MapType>($map_type) `)`
+      | `map_type_value` `(` $map_type `)`
       | `capture` `(` custom<CaptureType>($map_capture_type) `)`
       | `bounds` `(` $bounds `)`
     ) `->` type($omp_ptr) attr-dict
@@ -1202,7 +1204,7 @@ def Target_DataOp: OpenMP_Op<"target_data", [AttrSizedOperandSegments]>{
   let assemblyFormat = [{
     oilist(`if` `(` $if_expr `:` type($if_expr) `)`
     | `device` `(` $device `:` type($device) `)`
-    | `map` `(` $map_operands `:` type($map_operands) `)`
+    | `map_entries` `(` custom<MapClause>($map_operands, type($map_operands)) `)`
     | `use_device_ptr` `(` $use_device_ptr `:` type($use_device_ptr) `)`
     | `use_device_addr` `(` $use_device_addr `:` type($use_device_addr) `)`)
     $region attr-dict
@@ -1249,7 +1251,7 @@ def Target_EnterDataOp: OpenMP_Op<"target_enter_data",
   let assemblyFormat = [{
     oilist(`if` `(` $if_expr `:` type($if_expr) `)`
     | `device` `(` $device `:` type($device) `)`
-    | `map` `(` $map_operands `:` type($map_operands) `)`
+    | `map_entries` `(` custom<MapClause>($map_operands, type($map_operands)) `)`
     | `nowait` $nowait)
     attr-dict
    }];
@@ -1295,7 +1297,7 @@ def Target_ExitDataOp: OpenMP_Op<"target_exit_data",
   let assemblyFormat = [{
     oilist(`if` `(` $if_expr `:` type($if_expr) `)`
     | `device` `(` $device `:` type($device) `)`
-    | `map` `(` $map_operands `:` type($map_operands) `)`
+    | `map_entries` `(` custom<MapClause>($map_operands, type($map_operands)) `)`
     | `nowait` $nowait)
     attr-dict
    }];
@@ -1341,7 +1343,7 @@ def TargetOp : OpenMP_Op<"target",[AttrSizedOperandSegments]> {
     oilist( `if` `(` $if_expr `)`
     | `device` `(` $device `:` type($device) `)`
     | `thread_limit` `(` $thread_limit `:` type($thread_limit) `)`
-    | `map` `(` $map_operands `:` type($map_operands) `)`
+    | `map_entries` `(` custom<MapClause>($map_operands, type($map_operands)) `)`
     | `nowait` $nowait
     ) $region attr-dict
   }];
