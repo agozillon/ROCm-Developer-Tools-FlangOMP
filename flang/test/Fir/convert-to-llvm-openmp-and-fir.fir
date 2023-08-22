@@ -271,16 +271,16 @@ func.func @_QPomp_target_data() {
  // CHECK-LABEL:  llvm.func @_QPomp_target_data() {
  // CHECK:    %0 = llvm.mlir.constant(1024 : index) : i64
  // CHECK:    %[[VAL_0:.*]] = llvm.mlir.constant(1 : i64) : i64
- // CHECK:    %[[VAL_1:.*]] = llvm.alloca %[[VAL_0]] x !llvm.array<1024 x i32> {bindc_name = "a", in_type = !fir.array<1024xi32>, operand_segment_sizes = array<i32: 0, 0>, uniq_name = "_QFomp_target_dataEa"} : (i64) -> !llvm.ptr<array<1024 x i32>>
+ // CHECK:    %[[VAL_1:.*]] = llvm.alloca %[[VAL_0]] x !llvm.array<1024 x i32> {bindc_name = "a", in_type = !fir.array<1024xi32>, operandSegmentSizes = array<i32: 0, 0>, uniq_name = "_QFomp_target_dataEa"} : (i64) -> !llvm.ptr<array<1024 x i32>>
  // CHECK:    %3 = llvm.mlir.constant(1024 : index) : i64
  // CHECK:    %[[VAL_2:.*]] = llvm.mlir.constant(1 : i64) : i64
- // CHECK:    %[[VAL_3:.*]] = llvm.alloca %[[VAL_2]] x !llvm.array<1024 x i32> {bindc_name = "b", in_type = !fir.array<1024xi32>, operand_segment_sizes = array<i32: 0, 0>, uniq_name = "_QFomp_target_dataEb"} : (i64) -> !llvm.ptr<array<1024 x i32>>
+ // CHECK:    %[[VAL_3:.*]] = llvm.alloca %[[VAL_2]] x !llvm.array<1024 x i32> {bindc_name = "b", in_type = !fir.array<1024xi32>, operandSegmentSizes = array<i32: 0, 0>, uniq_name = "_QFomp_target_dataEb"} : (i64) -> !llvm.ptr<array<1024 x i32>>
  // CHECK:    %6 = llvm.mlir.constant(1024 : index) : i64
  // CHECK:    %[[VAL_4:.*]] = llvm.mlir.constant(1 : i64) : i64
- // CHECK:    %[[VAL_5:.*]] = llvm.alloca %[[VAL_4]] x !llvm.array<1024 x i32> {bindc_name = "c", in_type = !fir.array<1024xi32>, operand_segment_sizes = array<i32: 0, 0>, uniq_name = "_QFomp_target_dataEc"} : (i64) -> !llvm.ptr<array<1024 x i32>>
+ // CHECK:    %[[VAL_5:.*]] = llvm.alloca %[[VAL_4]] x !llvm.array<1024 x i32> {bindc_name = "c", in_type = !fir.array<1024xi32>, operandSegmentSizes = array<i32: 0, 0>, uniq_name = "_QFomp_target_dataEc"} : (i64) -> !llvm.ptr<array<1024 x i32>>
  // CHECK:    %9 = llvm.mlir.constant(1024 : index) : i64
  // CHECK:    %[[VAL_6:.*]] = llvm.mlir.constant(1 : i64) : i64
- // CHECK:    %[[VAL_7:.*]] = llvm.alloca %[[VAL_6]] x !llvm.array<1024 x i32> {bindc_name = "d", in_type = !fir.array<1024xi32>, operand_segment_sizes = array<i32: 0, 0>, uniq_name = "_QFomp_target_dataEd"} : (i64) -> !llvm.ptr<array<1024 x i32>>
+ // CHECK:    %[[VAL_7:.*]] = llvm.alloca %[[VAL_6]] x !llvm.array<1024 x i32> {bindc_name = "d", in_type = !fir.array<1024xi32>, operandSegmentSizes = array<i32: 0, 0>, uniq_name = "_QFomp_target_dataEd"} : (i64) -> !llvm.ptr<array<1024 x i32>>
  // CHECK:    %12 = llvm.mlir.constant(1 : index) : i64
  // CHECK:    %13 = llvm.mlir.constant(0 : index) : i64
  // CHECK:    %14 = llvm.mlir.constant(1023 : index) : i64
@@ -364,7 +364,7 @@ func.func @_QPopenmp_target_data_region() {
 // CHECK:           %[[VAL_0:.*]] = llvm.mlir.constant(1 : i64) : i64
 // CHECK:           %[[VAL_1:.*]] = llvm.alloca %[[VAL_0]] x !llvm.array<1024 x i32> {bindc_name = "a", in_type = !fir.array<1024xi32>, operandSegmentSizes = array<i32: 0, 0>, uniq_name = "_QFopenmp_target_data_regionEa"} : (i64) -> !llvm.ptr<array<1024 x i32>>
 // CHECK:           %[[VAL_2:.*]] = llvm.mlir.constant(1 : i64) : i64
-// CHECK:           %[[VAL_3:.*]] = llvm.alloca %[[VAL_2]] x i32 {bindc_name = "i", in_type = i32, operand_segment_sizes = array<i32: 0, 0>, uniq_name = "_QFopenmp_target_data_regionEi"} : (i64) -> !llvm.ptr<i32>
+// CHECK:           %[[VAL_3:.*]] = llvm.alloca %[[VAL_2]] x i32 {bindc_name = "i", in_type = i32, operandSegmentSizes = array<i32: 0, 0>, uniq_name = "_QFopenmp_target_data_regionEi"} : (i64) -> !llvm.ptr<i32>
 // CHECK:           %[[VAL_MAX:.*]] = llvm.mlir.constant(1024 : index) : i64
 // CHECK:           %[[VAL_ONE:.*]] = llvm.mlir.constant(1 : index) : i64
 // CHECK:           %[[VAL_ZERO:.*]] = llvm.mlir.constant(0 : index) : i64

@@ -264,11 +264,17 @@ end subroutine omp_target_device_addr
 
 !CHECK-LABEL: func.func @_QPomp_target_parallel_do() {
 subroutine omp_target_parallel_do
+   !CHECK: %[[C1024:.*]] = arith.constant 1024 : index
    !CHECK: %[[VAL_0:.*]] = fir.alloca !fir.array<1024xi32> {bindc_name = "a", uniq_name = "_QFomp_target_parallel_doEa"}
    integer :: a(1024)
    !CHECK: %[[VAL_1:.*]] = fir.alloca i32 {bindc_name = "i", uniq_name = "_QFomp_target_parallel_doEi"}
    integer :: i
-   !CHECK: omp.target   map((tofrom -> %[[VAL_0]] : !fir.ref<!fir.array<1024xi32>>)) {
+   !CHECK: %[[C1:.*]] = arith.constant 1 : index
+   !CHECK: %[[C0:.*]] = arith.constant 0 : index
+   !CHECK: %[[SUB:.*]] = arith.subi %[[C1024]], %[[C1]] : index
+   !CHECK: %[[BOUNDS:.*]] = omp.bounds   lower_bound(%[[C0]] : index) upper_bound(%[[SUB]] : index) extent(%[[C1024]] : index) stride(%[[C1]] : index) start_idx(%[[C1]] : index)
+   !CHECK: %[[MAP:.*]] = omp.map_entry var_ptr(%[[VAL_0]] : !fir.ref<!fir.array<1024xi32>>)   map_type_value(35) capture(ByRef) bounds(%[[BOUNDS]]) -> !fir.ref<!fir.array<1024xi32>> {name = "a"}
+   !CHECK: omp.target   map_entries((tofrom -> %[[MAP]] : !fir.ref<!fir.array<1024xi32>>)) {
       !CHECK-NEXT: omp.parallel
       !$omp target parallel do map(tofrom: a)
          !CHECK: %[[VAL_2:.*]] = fir.alloca i32 {adapt.valuebyref, pinned}
@@ -278,7 +284,7 @@ subroutine omp_target_parallel_do
          !CHECK: omp.wsloop   for  (%[[VAL_6:.*]]) : i32 = (%[[VAL_3]]) to (%[[VAL_4]]) inclusive step (%[[VAL_5]]) {
          !CHECK: fir.store %[[VAL_6]] to %[[VAL_2]] : !fir.ref<i32>
          !CHECK: %[[VAL_7:.*]] = arith.constant 10 : i32
-         !CHECK: %[[VAL_8:.*]] = fir.load %2 : !fir.ref<i32>
+         !CHECK: %[[VAL_8:.*]] = fir.load %5 : !fir.ref<i32>
          !CHECK: %[[VAL_9:.*]] = fir.convert %[[VAL_8]] : (i32) -> i64
          !CHECK: %[[VAL_10:.*]] = arith.constant 1 : i64
          !CHECK: %[[VAL_11:.*]] = arith.subi %[[VAL_9]], %[[VAL_10]] : i64

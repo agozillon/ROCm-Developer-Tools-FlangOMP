@@ -797,7 +797,6 @@ static LogicalResult
 convertOmpWsLoop(Operation &opInst, llvm::IRBuilderBase &builder,
                  LLVM::ModuleTranslation &moduleTranslation) {
   auto loop = cast<omp::WsLoopOp>(opInst);
-
   // TODO: this should be in the op verifier instead.
   if (loop.getLowerBound().empty())
     return failure();
@@ -815,6 +814,7 @@ convertOmpWsLoop(Operation &opInst, llvm::IRBuilderBase &builder,
         moduleTranslation.lookupValue(loop.getScheduleChunkVar());
     chunk = builder.CreateSExtOrTrunc(chunkVar, ivType);
   }
+
   SmallVector<omp::ReductionDeclareOp> reductionDecls;
   collectReductionDecls(loop, reductionDecls);
   llvm::OpenMPIRBuilder::InsertPointTy allocaIP =
@@ -936,14 +936,6 @@ convertOmpWsLoop(Operation &opInst, llvm::IRBuilderBase &builder,
   // ReductionInfo only accepts references to the generators.
   SmallVector<OwningReductionGen> owningReductionGens;
   SmallVector<OwningAtomicReductionGen> owningAtomicReductionGens;
-  for (unsigned i = 0; i < numReductions; ++i) {
-    owningReductionGens.push_back(
-        makeReductionGen(reductionDecls[i], builder, moduleTranslation));
-    owningAtomicReductionGens.push_back(
-        makeAtomicReductionGen(reductionDecls[i], builder, moduleTranslation));
-  }
-
-  // Collect the reduction information.
   SmallVector<llvm::OpenMPIRBuilder::ReductionInfo> reductionInfos;
   collectReductionInfo(loop, builder, moduleTranslation, reductionDecls,
                        owningReductionGens, owningAtomicReductionGens,
@@ -2323,10 +2315,7 @@ convertDeclareTargetAttr(Operation *op, mlir::omp::DeclareTargetAttr attribute,
       omp::DeclareTargetDeviceType declareType =
           attribute.getDeviceType().getValue();
 
-      if ((isDeviceCompilation &&
-           declareType == omp::DeclareTargetDeviceType::host) ||
-          (!isDeviceCompilation &&
-           declareType == omp::DeclareTargetDeviceType::nohost)) {
+      if (declareType == omp::DeclareTargetDeviceType::host) {
         llvm::Function *llvmFunc =
             moduleTranslation.lookupFunction(funcOp.getName());
         llvmFunc->dropAllReferences();
