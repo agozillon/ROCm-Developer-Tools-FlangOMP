@@ -2300,6 +2300,11 @@ private:
       genOpenMPReduction(*this, blockClauses);
     }
 
+    if (ompBlock) {
+      genImplicitMapsForTarget(*this, bridge.getSemanticsContext(), getEval(),
+                               *ompBlock);
+    }
+
     localSymbols.popScope();
     builder->restoreInsertionPoint(insertPt);
   }

@@ -21,6 +21,7 @@
 #include "flang/Optimizer/Builder/FIRBuilder.h"
 #include "flang/Optimizer/Builder/Todo.h"
 #include "flang/Optimizer/HLFIR/HLFIROps.h"
+#include "flang/Optimizer/Support/InternalNames.h"
 #include "flang/Parser/parse-tree.h"
 #include "flang/Semantics/openmp-directive-sets.h"
 #include "flang/Semantics/tools.h"
@@ -680,7 +681,7 @@ static bool mapRequiresReference(fir::FirOpBuilder &firOpBuilder,
 /// option
 static mlir::omp::VariableCaptureKind
 isCapturedByRef(Fortran::lower::AbstractConverter &converter,
-                Fortran::semantics::Symbol *capturedSym,
+                const Fortran::semantics::Symbol *capturedSym,
                 llvm::omp::Directive capturedByDirective,
                 bool isVariableUsedInMapClause = true,
                 bool isVariableAssociatedWithSection = false,
@@ -2118,13 +2119,12 @@ static mlir::Value gatherDataOperandAddrAndBounds(
   return baseAddr;
 }
 
-static mlir::omp::MapEntryOp createMapEntryOp(fir::FirOpBuilder &builder, 
-                            mlir::Location loc,
-                            mlir::Value baseAddr, std::stringstream &name,
-                            mlir::SmallVector<mlir::Value> bounds, 
-                            uint64_t mapType,
-                            mlir::omp::VariableCaptureKind mapCaptureType,
-                            bool implicit, mlir::Type retTy) {
+static mlir::omp::MapEntryOp
+createMapEntryOp(fir::FirOpBuilder &builder, mlir::Location loc,
+                 mlir::Value baseAddr, const std::string &name,
+                 mlir::SmallVector<mlir::Value> bounds, uint64_t mapType,
+                 mlir::omp::VariableCaptureKind mapCaptureType, bool implicit,
+                 mlir::Type retTy) {
   mlir::Value varPtrPtr;
   if (auto boxTy = baseAddr.getType().dyn_cast<fir::BaseBoxType>()) {
     baseAddr = builder.create<fir::BoxAddrOp>(loc, baseAddr);
@@ -2132,10 +2132,11 @@ static mlir::omp::MapEntryOp createMapEntryOp(fir::FirOpBuilder &builder,
   }
 
   mlir::omp::MapEntryOp op = builder.create<mlir::omp::MapEntryOp>(loc, retTy, baseAddr);
-  op.setNameAttr(builder.getStringAttr(name.str()));
+
+  op.setNameAttr(builder.getStringAttr(name));
   op.setImplicit(implicit);
   op.setMapType(mapType);
-  op.setMapCaptureType(mapCaptureType);  
+  op.setMapCaptureType(mapCaptureType);
 
   unsigned insPos = 1;
   if (varPtrPtr)
@@ -2236,12 +2237,12 @@ bool ClauseProcessor::processMap(
                   std::underlying_type_t<llvm::omp::OpenMPOffloadMappingFlags>>(
                   perValMapTypeBit);
 
-          mlir::omp::VariableCaptureKind mapCaptureKind 
-            = isCapturedByRef(converter, getOmpObjectSymbol(ompObject), directive);
-  
+          mlir::omp::VariableCaptureKind mapCaptureKind = isCapturedByRef(
+              converter, getOmpObjectSymbol(ompObject), directive);
+
           mapOperands.push_back(createMapEntryOp(
-            firOpBuilder, clauseLocation, baseAddr, asFortran, bounds, mapType,
-            mapCaptureKind, false, baseAddr.getType()));
+              firOpBuilder, clauseLocation, baseAddr, asFortran.str(), bounds,
+              mapType, mapCaptureKind, false, baseAddr.getType()));
         }
       });
 }
@@ -2871,6 +2872,87 @@ genEnterExitDataOp(Fortran::lower::AbstractConverter &converter,
 
   return converter.getFirOpBuilder().create<OpTy>(
       currentLocation, ifClauseOperand, deviceOperand, nowaitAttr, mapOperands);
+}
+
+void Fortran::lower::genImplicitMapsForTarget(
+    Fortran::lower::AbstractConverter &converter,
+    Fortran::semantics::SemanticsContext &semanticsContext,
+    Fortran::lower::pft::Evaluation &eval,
+    const Fortran::parser::OpenMPBlockConstruct &ompBlock) {
+  // TODO: Likely does not handle the full extent of operations that can be
+  // captured that have symbol names that we can retrieve, extend as required.
+  auto retrieveSymName = [](mlir::Value v) {
+    std::string name = "";
+    if (v.getDefiningOp()) {
+      if (auto alloca = mlir::dyn_cast<fir::AllocaOp>(v.getDefiningOp())) {
+        if (alloca.getUniqName().has_value())
+          name = alloca.getUniqName().value();
+      }
+
+      if (auto addr = mlir::dyn_cast<fir::AddrOfOp>(v.getDefiningOp())) {
+        name = addr.getSymbol().getRootReference().getValue();
+      }
+    }
+
+    return name;
+  };
+
+  const auto &beginBlockDirective =
+      std::get<Fortran::parser::OmpBeginBlockDirective>(ompBlock.t);
+  const auto &directive =
+      std::get<Fortran::parser::OmpBlockDirective>(beginBlockDirective.t);
+  fir::FirOpBuilder builder = converter.getFirOpBuilder();
+
+  if (llvm::omp::Directive::OMPD_target == directive.v) {
+    if (auto tarOp = mlir::dyn_cast<mlir::omp::TargetOp>(
+            builder.getInsertionPoint()->getParentOp())) {
+      // NOTE: It is possible to use Fortran::lower::pft::visitAllSymbols, here
+      // to access individual symbolic/semantic information for each implicit
+      // map operand where neccessary (need to retrieve the symbol name from the
+      // op to find the matching semantic symbol)
+      llvm::SetVector<mlir::Value> operandSet;
+      mlir::getUsedValuesDefinedAbove(tarOp.getRegion(), operandSet);
+
+      // filter out uses already being mapped (explicit maps)
+      for (auto op : operandSet) {
+        for (auto mapValue : tarOp.getMapOperands()) {
+          auto mapOp =
+              mlir::dyn_cast<mlir::omp::MapEntryOp>(mapValue.getDefiningOp());
+          if (mapOp.getVarPtr() == op) {
+            operandSet.remove(op);
+          }
+        }
+      }
+
+      // TODO: All captures are target_param, but not all are literal
+      // or marked as implicit (ironically), but this is the default
+      // handling and covers some initial base cases. However, this
+      // should be expanded on.
+      llvm::omp::OpenMPOffloadMappingFlags mapTypeBits =
+          llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_NONE |
+          llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_TARGET_PARAM |
+          llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_LITERAL |
+          llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_IMPLICIT;
+
+      uint64_t mapType = static_cast<
+          std::underlying_type_t<llvm::omp::OpenMPOffloadMappingFlags>>(
+          mapTypeBits);
+
+      builder.setInsertionPoint(tarOp);
+
+      llvm::SmallVector<mlir::Value> impMapOps;
+      for (auto value : operandSet) {
+        auto demangled =
+            fir::NameUniquer::deconstruct(retrieveSymName(value)).second.name;
+        impMapOps.push_back(createMapEntryOp(
+            builder, tarOp->getLoc(), value, demangled,
+            mlir::SmallVector<mlir::Value>{}, mapType,
+            mlir::omp::VariableCaptureKind::ByCopy, true, value.getType()));
+      }
+
+      tarOp.getMapOperandsMutable().append(impMapOps);
+    }
+  }
 }
 
 static mlir::omp::TargetOp
