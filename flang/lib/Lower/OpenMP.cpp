@@ -2031,9 +2031,11 @@ static mlir::Value gatherDataOperandAddrAndBounds(
           [&](const Fortran::parser::Designator &designator) {
             if (auto expr{Fortran::semantics::AnalyzeExpr(semanticsContext,
                                                           designator)}) {
+              llvm::errs() << "1 \n";
               if ((*expr).Rank() > 0 &&
                   Fortran::parser::Unwrap<Fortran::parser::ArrayElement>(
                       designator)) {
+                llvm::errs() << "1.1 \n";
                 const auto *arrayElement =
                     Fortran::parser::Unwrap<Fortran::parser::ArrayElement>(
                         designator);
@@ -2043,6 +2045,7 @@ static mlir::Value gatherDataOperandAddrAndBounds(
                 if (Fortran::parser::Unwrap<
                         Fortran::parser::StructureComponent>(
                         arrayElement->base)) {
+                  llvm::errs() << "1.2 \n";
                   auto exprBase = Fortran::semantics::AnalyzeExpr(
                       semanticsContext, arrayElement->base);
                   dataExv = converter.genExprAddr(operandLocation, *exprBase,
@@ -2050,6 +2053,7 @@ static mlir::Value gatherDataOperandAddrAndBounds(
                   baseAddr = fir::getBase(dataExv);
                   asFortran << (*exprBase).AsFortran();
                 } else {
+                  llvm::errs() << "1.3 \n";
                   const Fortran::parser::Name &name =
                       Fortran::parser::GetLastName(*dataRef);
                   baseAddr = getDataOperandBaseAddr(
@@ -2059,6 +2063,7 @@ static mlir::Value gatherDataOperandAddrAndBounds(
                 }
 
                 if (!arrayElement->subscripts.empty()) {
+                  llvm::errs() << "1.4 \n";
                   asFortran << '(';
                   bounds = genBoundsOps(builder, operandLocation, converter,
                                         stmtCtx, arrayElement->subscripts,
@@ -2067,6 +2072,8 @@ static mlir::Value gatherDataOperandAddrAndBounds(
                 asFortran << ')';
               } else if (Fortran::parser::Unwrap<
                              Fortran::parser::StructureComponent>(designator)) {
+
+                llvm::errs() << "1.5 \n";
                 fir::ExtendedValue compExv =
                     converter.genExprAddr(operandLocation, *expr, stmtCtx);
                 baseAddr = fir::getBase(compExv);
@@ -2076,6 +2083,10 @@ static mlir::Value gatherDataOperandAddrAndBounds(
                                             compExv, baseAddr);
                 asFortran << (*expr).AsFortran();
 
+                if (auto base = fir::unwrapRefType(baseAddr.getType())) {
+                  llvm::errs() << "dumping the base \n";
+                  base.dump();
+                }
                 // If the component is an allocatable or pointer the result of
                 // genExprAddr will be the result of a fir.box_addr operation.
                 // Retrieve the box so we handle it like other descriptor.
@@ -2086,6 +2097,8 @@ static mlir::Value gatherDataOperandAddrAndBounds(
                                                converter, compExv, baseAddr);
                 }
               } else {
+
+                llvm::errs() << "1.6 \n";
                 // Scalar or full array.
                 if (const auto *dataRef{
                         std::get_if<Fortran::parser::DataRef>(&designator.u)}) {
@@ -2105,6 +2118,7 @@ static mlir::Value gatherDataOperandAddrAndBounds(
                                               converter, dataExv, baseAddr);
                   asFortran << name.ToString();
                 } else { // Unsupported
+                  llvm::errs() << "1.7 \n";
                   llvm::report_fatal_error(
                       "Unsupported type of OpenACC operand");
                 }
@@ -2112,6 +2126,7 @@ static mlir::Value gatherDataOperandAddrAndBounds(
             }
           },
           [&](const Fortran::parser::Name &name) {
+            llvm::errs() << "2 \n";
             baseAddr = getDataOperandBaseAddr(converter, builder, *name.symbol,
                                               operandLocation);
             asFortran << name.ToString();
@@ -2122,16 +2137,11 @@ static mlir::Value gatherDataOperandAddrAndBounds(
 
 static mlir::omp::MapEntryOp
 createMapEntryOp(fir::FirOpBuilder &builder, mlir::Location loc,
-                 mlir::Value baseAddr, const std::string &name,
-                 mlir::SmallVector<mlir::Value> bounds, uint64_t mapType,
+                 mlir::Value baseAddr, mlir::Value varPtrPtr,
+                 const std::string &name, mlir::SmallVector<mlir::Value> bounds,
+                 uint64_t mapType,
                  mlir::omp::VariableCaptureKind mapCaptureType, bool implicit,
                  mlir::Type retTy) {
-  mlir::Value varPtrPtr;
-  if (auto boxTy = baseAddr.getType().dyn_cast<fir::BaseBoxType>()) {
-    baseAddr = builder.create<fir::BoxAddrOp>(loc, baseAddr);
-    retTy = baseAddr.getType();
-  }
-
   mlir::omp::MapEntryOp op = builder.create<mlir::omp::MapEntryOp>(loc, retTy, baseAddr);
 
   op.setNameAttr(builder.getStringAttr(name));
@@ -2205,12 +2215,12 @@ bool ClauseProcessor::processMap(
              std::get<Fortran::parser::OmpObjectList>(mapClause->v.t).v) {
           llvm::SmallVector<mlir::Value> bounds;
           std::stringstream asFortran;
+
           mlir::Value baseAddr = gatherDataOperandAddrAndBounds(
             converter, firOpBuilder, semanticsContext, stmtCtx, ompObject,
             clauseLocation, asFortran, bounds);
 
-          checkMapType(baseAddr.getLoc(), baseAddr.getType());
-
+      
           // TODO: Clang special cases this for several other cases (member
           // references as one example), see getMapTypeBits inside of
           // generateInfoForComponentList in Clang's CGOpenMPRuntime for
@@ -2241,9 +2251,64 @@ bool ClauseProcessor::processMap(
           mlir::omp::VariableCaptureKind mapCaptureKind = isCapturedByRef(
               converter, getOmpObjectSymbol(ompObject), directive);
 
+          if (Fortran::semantics::IsAllocatableOrPointer(
+                  *getOmpObjectSymbol(ompObject))) {
+
+            mlir::Value varPtrPtr;
+            if (auto boxTy = baseAddr.getType().dyn_cast<fir::BaseBoxType>()) {
+
+              // TODO: Perhaps fix so the IR is fine for both device and host,
+              // but I need to teach the early outliner to handle box types.
+              auto mod = mlir::dyn_cast<mlir::omp::OffloadModuleInterface>(
+                  firOpBuilder.getModule().getOperation());
+              if (!mod.getIsTargetDevice())
+                varPtrPtr = firOpBuilder.create<fir::BoxAddrOp>(clauseLocation,
+                                                                baseAddr);
+
+              if (auto loadOp =
+                      mlir::dyn_cast<fir::LoadOp>(baseAddr.getDefiningOp())) {
+                baseAddr = loadOp.getMemref();
+              }
+            }
+
+            // For now, in the case of pointers and allocatables we utilise the
+            // address recovered utilising the symbol directly, rather than the
+            // baseAddr calculated by the BoundsOp generation method. This is
+            // because the original symbol gives us the entire descriptor
+            // structure which contains the pointer and relevant runtime
+            // information for the pointer. We currently map the entire
+            // descriptor structure across to the target.
+            //
+            // The base address returned by
+            // gatherDataOperandAddrAndBounds currently returns the
+            // address of the underlying pointer data which would yield
+            // direct access to the pointer and allow the mapping of the
+            // pointer without the associated descriptor information.
+            //
+            // Unfortunately the device side code generated for the target
+            // region depends on this descriptor information as it is generated
+            // with the expectation of it being a regular Fortran
+            // pointer/allocatable with descriptor information and it generates
+            // the operations for accessing and utilising this information.
+            //
+            // Possible TODO: Look into optimisation pass (or other change) that
+            // could allow us to directly pass across the pointer without
+            // associated descriptor information, this could provide performance
+            // increases and would simplify the resulting IR. Although, perhaps
+            // we just lean into Fortran and accept this aspect.
+            baseAddr =
+                converter.getSymbolAddress(*getOmpObjectSymbol(ompObject));
+            mapOperands.push_back(
+                createMapEntryOp(firOpBuilder, clauseLocation, baseAddr,
+                                 varPtrPtr, asFortran.str(), bounds, mapType,
+                                 mapCaptureKind, false, baseAddr.getType()));
+
+            continue;
+          }
+
           mapOperands.push_back(createMapEntryOp(
-              firOpBuilder, clauseLocation, baseAddr, asFortran.str(), bounds,
-              mapType, mapCaptureKind, false, baseAddr.getType()));
+              firOpBuilder, clauseLocation, baseAddr, nullptr, asFortran.str(),
+              bounds, mapType, mapCaptureKind, false, baseAddr.getType()));
         }
       });
 }
@@ -2915,12 +2980,25 @@ void Fortran::lower::genImplicitMapsForTarget(
       mlir::getUsedValuesDefinedAbove(tarOp.getRegion(), operandSet);
 
       // filter out uses already being mapped (explicit maps)
-      for (auto op : operandSet) {
+      for (auto value : operandSet) {
         for (auto mapValue : tarOp.getMapOperands()) {
           auto mapOp =
               mlir::dyn_cast<mlir::omp::MapEntryOp>(mapValue.getDefiningOp());
-          if (mapOp.getVarPtr() == op) {
-            operandSet.remove(op);
+          mlir::Value underlyingValue = mapOp.getVarPtr();
+
+          // If we have a box, we have some value chasing to do, as the
+          // original symbol/used value is hidden by the box which contains
+          // more information on the underlying operation.
+          // if (auto boxAddr = mlir::dyn_cast<fir::BoxAddrOp>(
+          //         mapOp.getVarPtr().getDefiningOp())) {
+          //   if (auto load = mlir::dyn_cast<fir::LoadOp>(
+          //           boxAddr.getVal().getDefiningOp())) {
+          //     underlyingValue = load.getMemref();
+          //   }
+          // }
+
+          if (underlyingValue == value) {
+            operandSet.remove(value);
           }
         }
       }
@@ -2946,7 +3024,7 @@ void Fortran::lower::genImplicitMapsForTarget(
         auto demangled =
             fir::NameUniquer::deconstruct(retrieveSymName(value)).second.name;
         impMapOps.push_back(createMapEntryOp(
-            builder, tarOp->getLoc(), value, demangled,
+            builder, tarOp->getLoc(), value, nullptr, demangled,
             mlir::SmallVector<mlir::Value>{}, mapType,
             mlir::omp::VariableCaptureKind::ByCopy, true, value.getType()));
       }

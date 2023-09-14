@@ -1420,6 +1420,14 @@ mlir::translateModuleToLLVMIR(Operation *module, llvm::LLVMContext &llvmContext,
   if (failed(translator.convertOperation(*module, llvmBuilder)))
     return nullptr;
 
+  llvm::errs() << "MLIR Module IR \n\n\n";
+  module->dump();
+  llvm::errs() << "\n\n\n\n";
+
+  llvm::errs() << "LLVM Module IR \n\n\n";
+  translator.llvmModule->dump();
+  llvm::errs() << "\n\n\n\n";
+
   if (llvm::verifyModule(*translator.llvmModule, &llvm::errs()))
     return nullptr;
 

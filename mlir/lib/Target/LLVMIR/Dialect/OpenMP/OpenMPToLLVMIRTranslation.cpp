@@ -1608,6 +1608,191 @@ getRefPtrIfDeclareTarget(mlir::Value const &value,
   return nullptr;
 }
 
+// TODO: Move this and the Clang version inside of CGOpenMPRuntime.cpp into the
+// OMPIRBuilder.cpp
+static unsigned getFlagMemberOffset() {
+  unsigned Offset = 0;
+  for (uint64_t Remain = static_cast<
+           std::underlying_type_t<llvm::omp::OpenMPOffloadMappingFlags>>(
+           llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_MEMBER_OF);
+       !(Remain & 1); Remain = Remain >> 1)
+    Offset++;
+  return Offset;
+}
+
+// TODO: Move this and the Clang version inside of CGOpenMPRuntime.cpp into the
+// OMPIRBuilder.cpp
+static llvm::omp::OpenMPOffloadMappingFlags getMemberOfFlag(unsigned Position) {
+  // Rotate by getFlagMemberOffset() bits.
+  return static_cast<llvm::omp::OpenMPOffloadMappingFlags>(
+      ((uint64_t)Position + 1) << getFlagMemberOffset());
+}
+
+// TODO: Move this and the Clang version inside of CGOpenMPRuntime.cpp into the
+// OMPIRBuilder.cpp
+static void
+setCorrectMemberOfFlag(llvm::omp::OpenMPOffloadMappingFlags &Flags,
+                       llvm::omp::OpenMPOffloadMappingFlags MemberOfFlag) {
+  // If the entry is PTR_AND_OBJ but has not been marked with the special
+  // placeholder value 0xFFFF in the MEMBER_OF field, then it should not be
+  // marked as MEMBER_OF.
+  if (static_cast<std::underlying_type_t<llvm::omp::OpenMPOffloadMappingFlags>>(
+          Flags & llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_PTR_AND_OBJ) &&
+      static_cast<std::underlying_type_t<llvm::omp::OpenMPOffloadMappingFlags>>(
+          (Flags & llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_MEMBER_OF) !=
+          llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_MEMBER_OF))
+    return;
+
+  // Reset the placeholder value to prepare the flag for the assignment of the
+  // proper MEMBER_OF value.
+  Flags &= ~llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_MEMBER_OF;
+  Flags |= MemberOfFlag;
+}
+
+// Fortran pointers and allocatables come with descriptor information alongside
+// a pointer to the data itself, currently we map this together as we would a
+// regular C/C++ structure with a pointer member that's been specified
+// explicitly as a map argument, as the lowered target region from Fortran
+// has expectations that it's dealing with this descriptor and the pointer
+// or allocatable information to perform runtime checks and calculations.
+// A future optimisation pass may allow us to elide this descriptor information
+// and simplify the kernel in certain cases where we can prove the bounds are
+// known at compile time.
+//
+// The descriptor information (pointed to by the BoundsOp of the map) allows us
+// to take this liberty with the mapping, it contains dynamic information for
+// the pointer, such as its runtime size, and type.
+//
+// TODO: Extend for allocatables N > 1 for allocatables or pointers pointing at
+// N-Dimensional data
+// TODO: Generalize this function to allow it's use with member mapping of
+// derived types in Fortran and structures/classes in C/C++ (no C/C++ frontend
+// yet, but this can likely be made applicable to both), as this is in essence
+// just a single explicit member map for a structure at the moment.
+static void processFortranAllocaOrPointerMap(
+    LLVM::ModuleTranslation &moduleTranslation, llvm::IRBuilderBase &builder,
+    llvm::OpenMPIRBuilder &ompBuilder, DataLayout &dl,
+    llvm::OpenMPIRBuilder::MapInfosTy &combinedInfo,
+    mlir::omp::MapEntryOp &mapOp) {
+  // Map the first segment of our structure (pointer and descriptor), the
+  // pointer to the descriptor itself.
+  llvm::Value *pointer = moduleTranslation.lookupValue(mapOp.getVarPtr());
+  combinedInfo.Types.emplace_back(
+      llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_TARGET_PARAM);
+  combinedInfo.DevicePointers.emplace_back(
+      llvm::OpenMPIRBuilder::DeviceInfoTy::None);
+  combinedInfo.Names.emplace_back(
+      LLVM::createMappingInformation(mapOp.getLoc(), ompBuilder));
+  combinedInfo.BasePointers.emplace_back(pointer);
+  combinedInfo.Pointers.emplace_back(pointer);
+
+  llvm::Type *underlyingType;
+  if (auto ptrType =
+          mlir::dyn_cast<LLVM::LLVMPointerType>(mapOp.getVarPtr().getType()))
+    underlyingType = moduleTranslation.convertType(ptrType.getElementType());
+
+  llvm::Value *hAddr = builder.CreateConstGEP1_32(underlyingType, pointer, 1);
+  llvm::Value *lAddr = builder.CreatePointerCast(pointer, builder.getPtrTy());
+  hAddr = builder.CreatePointerCast(hAddr, builder.getPtrTy());
+  llvm::Value *diff = builder.CreatePtrDiff(builder.getInt8Ty(), hAddr, lAddr);
+  llvm::Value *size = builder.CreateIntCast(diff, builder.getInt64Ty(),
+                                            /*isSigned=*/false);
+  combinedInfo.Sizes.push_back(size);
+
+  // second segment
+  combinedInfo.DevicePointers.emplace_back(
+      llvm::OpenMPIRBuilder::DeviceInfoTy::None);
+  combinedInfo.Names.emplace_back(
+      LLVM::createMappingInformation(mapOp.getLoc(), ompBuilder));
+
+  auto mapFlag =
+      llvm::omp::OpenMPOffloadMappingFlags(mapOp.getMapType().value());
+  mapFlag &= ~llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_TARGET_PARAM;
+
+  llvm::omp::OpenMPOffloadMappingFlags memberOfFlag =
+      getMemberOfFlag(combinedInfo.BasePointers.size() - 1);
+  setCorrectMemberOfFlag(mapFlag, memberOfFlag);
+
+  combinedInfo.Types.emplace_back(mapFlag);
+  combinedInfo.BasePointers.emplace_back(pointer);
+  combinedInfo.Pointers.emplace_back(pointer);
+  // if (inputSizes.empty())
+  llvm::errs() << "size of mapOp.getVarPtr: "
+               << getSizeInBytes(dl, mapOp.getVarPtr().getType()) << "\n";
+
+  llvm::errs() << "size of mapOp.getVarVarPtr: "
+               << getSizeInBytes(dl, mapOp.getVarPtrPtr().getType()) << "\n";
+
+  mapOp.getVarPtr().getType().dump();
+
+  combinedInfo.Sizes.emplace_back(
+      builder.getInt64(getSizeInBytes(dl, mapOp.getVarPtr().getType())));
+
+  // third segment
+  combinedInfo.DevicePointers.emplace_back(
+      llvm::OpenMPIRBuilder::DeviceInfoTy::None);
+  combinedInfo.Names.emplace_back(
+      LLVM::createMappingInformation(mapOp.getLoc(), ompBuilder));
+
+  // may need to start with bare mapflag again
+  mapFlag |= llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_PTR_AND_OBJ;
+
+  // TODO: Need to get the size from somewhere, not just hardcode it
+
+  auto varptrptr = moduleTranslation.lookupValue(mapOp.getVarPtrPtr());
+
+  llvm::errs() << "varptrptr dump \n";
+  varptrptr->getType()->dump();
+  varptrptr->dump();
+  mapOp.getVarPtrPtr().dump();
+  mapOp.getVarPtrPtr().getType().dump();
+
+  if (auto ptrType =
+          mlir::dyn_cast<LLVM::LLVMPointerType>(mapOp.getVarPtrPtr().getType()))
+    underlyingType = moduleTranslation.convertType(ptrType.getElementType());
+
+  // TODO: This be the underlying type of the array/array elements, i.e. if
+  // it's pointing to a float array then it's a gep on a float, etc.
+
+  auto idx2 =
+      std::vector<llvm::Value *>{builder.getInt64(0), builder.getInt64(0)};
+  auto *array =
+      builder.CreateInBoundsGEP(underlyingType, pointer, idx2, "array");
+
+  auto loadArr = builder.CreateLoad(array->getType(), array);
+  auto idx = std::vector<llvm::Value *>{builder.getInt64(0)};
+  auto *arrayidx =
+      builder.CreateInBoundsGEP(builder.getInt32Ty(), loadArr, idx, "arrayidx");
+
+
+  // We can either do an isPointerOrAlloca bool and then specific access to
+  // the pointer element.
+  //
+  // Or getVarPtr GetVarPtrPtr (check the OpenACC post for ref as to the
+  // appropriate usage of varPtrPtr) and use one segment for the type info
+  // of the element, although we will have to peel back a layer of pointer
+  // still. PERHAPS DO THIS TO MAKE MORE GENERIC, BUT WOULD HAVE TO DO SOME
+  // LARGER ALTERATIONS TO CONSIDER MAPPING MORE THAN ONE PART OF A STRUCT
+  // IN A MAP 
+
+    auto boundOp = mlir::dyn_cast<mlir::omp::DataBoundsOp>(
+        mapOp.getBounds()[0].getDefiningOp());
+  llvm::Value *lb = moduleTranslation.lookupValue(boundOp.getLowerBound());
+  llvm::Value *ub = moduleTranslation.lookupValue(boundOp.getUpperBound());
+  llvm::Value *stride = moduleTranslation.lookupValue(boundOp.getStride());
+
+  // NOTE: we must correct off by 1 from an earlier subtraction to the
+  // UB that puts it in LLVM-IR index ranges
+  llvm::Value *extent =
+      builder.CreateAdd(builder.CreateSub(ub, lb), builder.getInt64(1));
+  size = builder.CreateMul(extent, stride);
+
+  combinedInfo.Types.emplace_back(mapFlag);
+  combinedInfo.BasePointers.emplace_back(array);
+  combinedInfo.Pointers.emplace_back(arrayidx);
+  combinedInfo.Sizes.emplace_back(size);
+}
+
 static void
 processMapOp(llvm::IRBuilderBase &builder,
              LLVM::ModuleTranslation &moduleTranslation, DataLayout &dl,
@@ -1656,12 +1841,6 @@ processMapOp(llvm::IRBuilderBase &builder,
     if (!basePointer)
       basePointer = moduleTranslation.lookupValue(mapOp.getVarPtr());
 
-    if (auto *refPtr =
-            getRefPtrIfDeclareTarget(mapOp.getVarPtr(), moduleTranslation))
-      combinedInfo.BasePointers.emplace_back(refPtr);
-    else
-      combinedInfo.BasePointers.emplace_back(basePointer);
-
     llvm::Value *pointer = nullptr;
     mapV = operandsPointers.find(mapOp.getVarPtr());
     if (mapV != operandsPointers.end())
@@ -1669,6 +1848,21 @@ processMapOp(llvm::IRBuilderBase &builder,
 
     if (!pointer)
       pointer = moduleTranslation.lookupValue(mapOp.getVarPtr());
+
+    if (mapOp.getVarPtr() && mapOp.getVarPtrPtr()) {
+
+      processFortranAllocaOrPointerMap(moduleTranslation, builder, *ompBuilder,
+                                       dl, combinedInfo, mapOp);
+
+      index++;
+      continue;
+    }
+
+    if (auto *refPtr =
+            getRefPtrIfDeclareTarget(mapOp.getVarPtr(), moduleTranslation))
+      combinedInfo.BasePointers.emplace_back(refPtr);
+    else
+      combinedInfo.BasePointers.emplace_back(basePointer);
 
     combinedInfo.Pointers.emplace_back(pointer);
     combinedInfo.DevicePointers.emplace_back(

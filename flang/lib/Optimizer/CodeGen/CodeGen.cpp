@@ -278,6 +278,9 @@ protected:
       type = t.getElementType();
     for (unsigned i : indexes) {
       if (auto t = type.dyn_cast<mlir::LLVM::LLVMStructType>()) {
+        llvm::errs() << "Is Opaque?: " << t.isOpaque() << "\n";
+        llvm::errs() << "t" << t.getBody().size() << "\n";
+        llvm::errs() << "i: " << i << "\n";
         assert(!t.isOpaque() && i < t.getBody().size());
         type = t.getBody()[i];
       } else if (auto t = type.dyn_cast<mlir::LLVM::LLVMArrayType>()) {
@@ -346,13 +349,27 @@ protected:
                : parentOp->getParentOfType<mlir::LLVM::LLVMFuncOp>();
   }
 
+  mlir::omp::TargetOp
+  getOmpTargetForAllocaInsert(mlir::ConversionPatternRewriter &rewriter) const {
+    mlir::Operation *parentOp = rewriter.getInsertionBlock()->getParentOp();
+    if (mlir::isa<mlir::omp::TargetOp>(parentOp))
+      return mlir::cast<mlir::omp::TargetOp>(parentOp);
+    return nullptr;
+  }
+
   // Generate an alloca of size 1 and type \p toTy.
   mlir::LLVM::AllocaOp
   genAllocaWithType(mlir::Location loc, mlir::Type toTy, unsigned alignment,
                     mlir::ConversionPatternRewriter &rewriter) const {
     auto thisPt = rewriter.saveInsertionPoint();
-    mlir::LLVM::LLVMFuncOp func = getFuncForAllocaInsert(rewriter);
-    rewriter.setInsertionPointToStart(&func.front());
+    auto targetOp = getOmpTargetForAllocaInsert(rewriter);
+    if (!targetOp) {
+      mlir::LLVM::LLVMFuncOp func = getFuncForAllocaInsert(rewriter);
+      rewriter.setInsertionPointToStart(&func.front());
+    } else {
+      rewriter.setInsertionPointToStart(&targetOp.getRegion().front());
+    }
+
     auto size = genI32Constant(loc, rewriter, 1);
     auto al = rewriter.create<mlir::LLVM::AllocaOp>(loc, toTy, size, alignment);
     rewriter.restoreInsertionPoint(thisPt);
@@ -1445,12 +1462,16 @@ struct EmboxCommonConversion : public FIROpConversion<OP> {
     bool useInputType = fir::isPolymorphicType(boxTy) || isUnlimitedPolymorphic;
     mlir::Value descriptor =
         rewriter.create<mlir::LLVM::UndefOp>(loc, llvmBoxTy);
+
+    eleSize.dump();
+
     descriptor =
         insertField(rewriter, loc, descriptor, {kElemLenPosInBox}, eleSize);
     descriptor = insertField(rewriter, loc, descriptor, {kVersionPosInBox},
                              this->genI32Constant(loc, rewriter, CFI_VERSION));
     descriptor = insertField(rewriter, loc, descriptor, {kRankPosInBox},
                              this->genI32Constant(loc, rewriter, rank));
+    llvm::errs() << "RANK: " << rank << "\n";
     descriptor = insertField(rewriter, loc, descriptor, {kTypePosInBox}, cfiTy);
     descriptor =
         insertField(rewriter, loc, descriptor, {kAttributePosInBox},
@@ -1479,6 +1500,10 @@ struct EmboxCommonConversion : public FIROpConversion<OP> {
                                        fir::unwrapIfDerived(boxTy));
         }
       }
+
+      // llvm::errs() << "has type descriptor addendum? \n";
+      // typeDesc.dump();
+
       if (typeDesc)
         descriptor =
             insertField(rewriter, loc, descriptor, {typeDescFieldId}, typeDesc,
@@ -1915,6 +1940,7 @@ struct XReboxOpConversion : public EmboxCommonConversion<fir::cg::XReboxOp> {
   mlir::LogicalResult
   matchAndRewrite(fir::cg::XReboxOp rebox, OpAdaptor adaptor,
                   mlir::ConversionPatternRewriter &rewriter) const override {
+
     mlir::Location loc = rebox.getLoc();
     mlir::Type idxTy = lowerTy().indexType();
     mlir::Value loweredBox = adaptor.getOperands()[0];
@@ -3745,6 +3771,9 @@ public:
         mlir::createConvertMathToLLVMPass());
     if (mlir::failed(runPipeline(mathConvertionPM, mod)))
       return signalPassFailure();
+
+    // if a loadop spawns an alloca if it's a box, why does the alloca for the
+    // target op load op end up external to the target op?
 
     auto *context = getModule().getContext();
     fir::LLVMTypeConverter typeConverter{getModule(),

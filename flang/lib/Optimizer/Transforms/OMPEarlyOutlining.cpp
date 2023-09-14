@@ -176,7 +176,6 @@ class OMPEarlyOutliningPass
 
         if (mapEntry.getVarPtr().getDefiningOp() &&
             isDeclareTargetOp(mapEntry.getVarPtr().getDefiningOp())) {
-          // llvm::errs() << "5.1.1 \n";
           fir::AddrOfOp addrOp = mlir::dyn_cast<fir::AddrOfOp>(
               mapEntry.getVarPtr().getDefiningOp());
           mlir::Value newV = builder.clone(*addrOp)->getResult(0);

@@ -8427,8 +8427,13 @@ public:
     // 0xFFFF in the MEMBER_OF field).
     OpenMPOffloadMappingFlags MemberOfFlag =
         getMemberOfFlag(CombinedInfo.BasePointers.size() - 1);
-    for (auto &M : CurTypes)
+    llvm::errs() << "memberof flag: " << static_cast<std::underlying_type_t<OpenMPOffloadMappingFlags>>(MemberOfFlag) << "\n";
+    llvm::errs() << "base ptr size -1 " << (CombinedInfo.BasePointers.size() - 1) << "\n";
+
+    for (auto &M : CurTypes) {
+      llvm::errs() << "setCurrentType / modify: " << static_cast<std::underlying_type_t<OpenMPOffloadMappingFlags>>(M) << "\n";
       setCorrectMemberOfFlag(M, MemberOfFlag);
+    }
   }
 
   /// Generate all the base pointers, section pointers, sizes, map types, and

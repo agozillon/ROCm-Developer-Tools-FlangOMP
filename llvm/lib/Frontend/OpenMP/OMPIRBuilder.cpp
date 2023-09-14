@@ -4416,7 +4416,11 @@ FunctionCallee OpenMPIRBuilder::createDispatchFiniFunction(unsigned IVSize,
 static Value *getArgAccessFromCapture(
     IRBuilderBase &Builder, OpenMPIRBuilder &OMPBuilder, Argument &Arg,
     Value *Input, Type *InputType,
-    OffloadEntriesInfoManager::OMPTargetVarCaptureKind Capture) {
+    OffloadEntriesInfoManager::OMPTargetVarCaptureKind Capture,
+    Instruction *RegularInsert, Instruction *PreInitInsert) {
+
+  Builder.SetInsertPoint(PreInitInsert);
+
   // Clang has an AS mapping for this for multiple programming models and
   // architectures, we may need something similar if this is too simple
   unsigned int AllocaAS = OMPBuilder.M.getDataLayout().getAllocaAddrSpace();
@@ -4438,6 +4442,8 @@ static Value *getArgAccessFromCapture(
   }
 
   Builder.CreateStore(&Arg, V);
+
+  // Builder.SetInsertPoint(RegularInsert);
 
   switch (Capture) {
   case OffloadEntriesInfoManager::OMPTargetVarCaptureKind::
@@ -4586,18 +4592,21 @@ static Function *createOutlinedFunction(
                          Func->getEntryBlock().getFirstNonPHIOrDbgOrAlloca());
 
   // Rewrite uses of input valus to parameters.
-  Builder.SetInsertPoint(UserCodeEntryBB->getFirstNonPHIOrDbg());
+  // Builder.SetInsertPoint();
+  auto *PreInitInsert = EntryBB->getFirstNonPHI();
+  auto *RegularInsert = UserCodeEntryBB->getFirstNonPHIOrDbg();
+
   for (auto InArg : zip(Func->args(), Inputs, InputTypes, InputsCaptureKind)) {
     Argument &Arg = std::get<0>(InArg);
     Value *Input = std::get<1>(InArg);
     Type *Types = std::get<2>(InArg);
     OffloadEntriesInfoManager::OMPTargetVarCaptureKind Capture =
         std::get<3>(InArg);
-    
+
     Value *InputCopy =
         OMPBuilder.Config.isTargetDevice()
-            ? getArgAccessFromCapture(Builder, OMPBuilder, Arg,
-                                                     Input, Types, Capture)
+            ? getArgAccessFromCapture(Builder, OMPBuilder, Arg, Input, Types,
+                                      Capture, RegularInsert, PreInitInsert)
             : &Arg;
 
     // Things like GEP's can come in the form of Constants, constants and ConstantExpr's
