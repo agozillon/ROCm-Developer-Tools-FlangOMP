@@ -4603,11 +4603,18 @@ static Function *createOutlinedFunction(
     OffloadEntriesInfoManager::OMPTargetVarCaptureKind Capture =
         std::get<3>(InArg);
 
+    // Arg.dump();
+    // Input->dump();
+    // Types->dump();
+
     Value *InputCopy =
         OMPBuilder.Config.isTargetDevice()
             ? getArgAccessFromCapture(Builder, OMPBuilder, Arg, Input, Types,
                                       Capture, RegularInsert, PreInitInsert)
             : &Arg;
+
+    // InputCopy->dump();
+    // llvm::errs() << "end out\n";
 
     // Things like GEP's can come in the form of Constants, constants and ConstantExpr's
     // do not have access to the knowledge of what they're contained in, so we must 

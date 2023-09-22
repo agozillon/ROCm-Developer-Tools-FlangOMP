@@ -715,10 +715,6 @@ void CodeGenAction::generateLLVMIR() {
   pm.addPass(std::make_unique<Fortran::lower::VerifierPass>());
   pm.enableVerifier(/*verifyPasses=*/true);
 
-  llvm::errs() << "Dump module after initial lowering \n\n\n\n\n";
-  mlirModule->dump();
-  llvm::errs() << "\n\n\n\n\n\n";
-
   // Create the pass pipeline
   fir::createMLIRToLLVMPassPipeline(pm, level, opts.StackArrays,
                                     opts.Underscoring, opts.LoopVersioning,

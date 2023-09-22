@@ -511,7 +511,6 @@ mlir::Value fir::FirOpBuilder::createBox(mlir::Location loc,
                                          const fir::ExtendedValue &exv,
                                          bool isPolymorphic,
                                          bool isAssumedType) {
-                                          llvm::errs() << "createbox \n";
   mlir::Value itemAddr = fir::getBase(exv);
   if (itemAddr.getType().isa<fir::BaseBoxType>())
     return itemAddr;
@@ -537,7 +536,7 @@ mlir::Value fir::FirOpBuilder::createBox(mlir::Location loc,
     }
   }
 
-  auto v = exv.match(
+  return exv.match(
       [&](const fir::ArrayBoxValue &box) -> mlir::Value {
         mlir::Value empty;
         mlir::ValueRange emptyRange;
@@ -581,9 +580,6 @@ mlir::Value fir::FirOpBuilder::createBox(mlir::Location loc,
         return create<fir::EmboxOp>(loc, boxTy, itemAddr, empty, empty,
                                     emptyRange, tdesc);
       });
-
-v.dump();
-      return v;
 }
 
 mlir::Value fir::FirOpBuilder::createBox(mlir::Location loc, mlir::Type boxType,
@@ -591,11 +587,10 @@ mlir::Value fir::FirOpBuilder::createBox(mlir::Location loc, mlir::Type boxType,
                                          mlir::Value slice,
                                          llvm::ArrayRef<mlir::Value> lengths,
                                          mlir::Value tdesc) {
-                                          llvm::errs() << "createbox 2 \n";
-  mlir::Type valueOrSequenceType = fir::unwrapPassByRefType(boxType);
-  return create<fir::EmboxOp>(
-      loc, boxType, addr, shape, slice,
-      elideLengthsAlreadyInType(valueOrSequenceType, lengths), tdesc);
+      mlir::Type valueOrSequenceType = fir::unwrapPassByRefType(boxType);
+      return create<fir::EmboxOp>(
+          loc, boxType, addr, shape, slice,
+          elideLengthsAlreadyInType(valueOrSequenceType, lengths), tdesc);
 }
 
 void fir::FirOpBuilder::dumpFunc() { getFunction().dump(); }
@@ -1470,7 +1465,6 @@ fir::BoxValue fir::factory::createBoxValue(fir::FirOpBuilder &builder,
   if (auto *boxValue = exv.getBoxOf<fir::BoxValue>())
     return *boxValue;
 
-  llvm::errs() << "createBoxValue \n";
   mlir::Value box = builder.createBox(loc, exv);
   llvm::SmallVector<mlir::Value> lbounds;
   llvm::SmallVector<mlir::Value> explicitTypeParams;

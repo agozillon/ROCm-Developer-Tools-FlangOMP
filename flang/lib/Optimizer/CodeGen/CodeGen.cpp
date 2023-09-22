@@ -278,9 +278,6 @@ protected:
       type = t.getElementType();
     for (unsigned i : indexes) {
       if (auto t = type.dyn_cast<mlir::LLVM::LLVMStructType>()) {
-        llvm::errs() << "Is Opaque?: " << t.isOpaque() << "\n";
-        llvm::errs() << "t" << t.getBody().size() << "\n";
-        llvm::errs() << "i: " << i << "\n";
         assert(!t.isOpaque() && i < t.getBody().size());
         type = t.getBody()[i];
       } else if (auto t = type.dyn_cast<mlir::LLVM::LLVMArrayType>()) {
@@ -1463,15 +1460,12 @@ struct EmboxCommonConversion : public FIROpConversion<OP> {
     mlir::Value descriptor =
         rewriter.create<mlir::LLVM::UndefOp>(loc, llvmBoxTy);
 
-    eleSize.dump();
-
     descriptor =
         insertField(rewriter, loc, descriptor, {kElemLenPosInBox}, eleSize);
     descriptor = insertField(rewriter, loc, descriptor, {kVersionPosInBox},
                              this->genI32Constant(loc, rewriter, CFI_VERSION));
     descriptor = insertField(rewriter, loc, descriptor, {kRankPosInBox},
                              this->genI32Constant(loc, rewriter, rank));
-    llvm::errs() << "RANK: " << rank << "\n";
     descriptor = insertField(rewriter, loc, descriptor, {kTypePosInBox}, cfiTy);
     descriptor =
         insertField(rewriter, loc, descriptor, {kAttributePosInBox},
@@ -1500,9 +1494,6 @@ struct EmboxCommonConversion : public FIROpConversion<OP> {
                                        fir::unwrapIfDerived(boxTy));
         }
       }
-
-      // llvm::errs() << "has type descriptor addendum? \n";
-      // typeDesc.dump();
 
       if (typeDesc)
         descriptor =

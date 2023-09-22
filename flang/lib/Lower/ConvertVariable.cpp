@@ -157,7 +157,6 @@ static fir::GlobalOp declareGlobal(Fortran::lower::AbstractConverter &converter,
   if (fir::GlobalOp global = builder.getNamedGlobal(globalName))
     return global;
 
-  llvm::errs() << "global data? \n";
   // Always define linkonce data since it may be optimized out from the module
   // that actually owns the variable if it does not refers to it.
   if (linkage == builder.createLinkOnceODRLinkage() ||
