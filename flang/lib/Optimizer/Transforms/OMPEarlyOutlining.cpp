@@ -42,10 +42,10 @@ class OMPEarlyOutliningPass
     return false;
   }
 
-  // Primarily used for cloning bounds, but likely a little more generically
-  // useable, however, it only handles values/operations with a single result
-  // (for anything it clones, the first result will be the thing inserted)
-  // and does not attempt to clone regions, just operands.
+  // Currently used for cloning arguments that are nested where each argument
+  // has a single SSA result, it does not attempt to clone regions, just
+  // operands. Should be extendable where required, perhaps via operation
+  // specialisation/overloading.
   // NOTE: Results in duplication of some values that would otherwise be
   // a single SSA value shared between operations, however, subsequent
   // optimisation passes clean this up and these values as they're used
@@ -53,7 +53,6 @@ class OMPEarlyOutliningPass
   mlir::Operation *cloneBoundArgAndChildren(mlir::OpBuilder &builder,
                                             mlir::Operation *op) {
     mlir::IRMapping valueMap;
-
     // Remap the operands.
     for (auto opValue : op->getOperands())
       valueMap.map(opValue,
@@ -61,6 +60,35 @@ class OMPEarlyOutliningPass
                        ->getResult(0));
 
     return builder.clone(*op, valueMap);
+  }
+
+  void cloneMapOpVariables(mlir::OpBuilder &builder, mlir::IRMapping &valueMap,
+                           mlir::IRMapping &mapInfoMap,
+                           llvm::SetVector<mlir::Value> &inputs,
+                           mlir::Block::BlockArgListType &newInputs,
+                           mlir::Value varPtr) {
+    if (fir::BoxAddrOp boxAddrOp =
+            mlir::dyn_cast<fir::BoxAddrOp>(varPtr.getDefiningOp())) {
+      mlir::Value newV =
+          cloneBoundArgAndChildren(builder, boxAddrOp)->getResult(0);
+      mapInfoMap.map(varPtr, newV);
+      valueMap.map(boxAddrOp, newV);
+      return;
+    }
+
+    if (varPtr.getDefiningOp() && isDeclareTargetOp(varPtr.getDefiningOp())) {
+      fir::AddrOfOp addrOp =
+          mlir::dyn_cast<fir::AddrOfOp>(varPtr.getDefiningOp());
+      mlir::Value newV = builder.clone(*addrOp)->getResult(0);
+      mapInfoMap.map(varPtr, newV);
+      valueMap.map(addrOp, newV);
+      return;
+    }
+
+    for (auto inArg : llvm::zip(inputs, newInputs)) {
+      if (varPtr == std::get<0>(inArg))
+        mapInfoMap.map(varPtr, std::get<1>(inArg));
+    }
   }
 
   mlir::func::FuncOp outlineTargetOp(mlir::OpBuilder &builder,
@@ -96,7 +124,7 @@ class OMPEarlyOutliningPass
         mlir::func::FuncOp::create(loc, funcName, funcType);
     mlir::Block *entryBlock = newFunc.addEntryBlock();
     builder.setInsertionPointToStart(entryBlock);
-    auto newInputs = entryBlock->getArguments();
+    mlir::Block::BlockArgListType newInputs = entryBlock->getArguments();
 
     // Set the declare target information, the outlined function
     // is always a host function.
@@ -129,7 +157,7 @@ class OMPEarlyOutliningPass
     for (auto oper : targetOp.getOperation()->getOperands()) {
       if (auto mapEntry =
               mlir::dyn_cast<mlir::omp::MapEntryOp>(oper.getDefiningOp())) {
-        mlir::IRMapping mapEntryMap;
+        mlir::IRMapping mapInfoMap;
         for (auto bound : mapEntry.getBounds()) {
           if (auto mapEntryBound = mlir::dyn_cast<mlir::omp::DataBoundsOp>(
                   bound.getDefiningOp())) {
@@ -169,28 +197,21 @@ class OMPEarlyOutliningPass
                   cloneBoundArgAndChildren(
                       builder, mapEntryBound.getExtent().getDefiningOp())
                       ->getResult(0));
-            mapEntryMap.map(
+            mapInfoMap.map(
                 bound, builder.clone(*mapEntryBound, boundMap)->getResult(0));
           }
         }
 
-        if (mapEntry.getVarPtr().getDefiningOp() &&
-            isDeclareTargetOp(mapEntry.getVarPtr().getDefiningOp())) {
-          fir::AddrOfOp addrOp = mlir::dyn_cast<fir::AddrOfOp>(
-              mapEntry.getVarPtr().getDefiningOp());
-          mlir::Value newV = builder.clone(*addrOp)->getResult(0);
-          mapEntryMap.map(mapEntry.getVarPtr(), newV);
-          valueMap.map(addrOp, newV);
-        } else {
-          for (auto inArg : llvm::zip(inputs, newInputs)) {
-            if (mapEntry.getVarPtr() == std::get<0>(inArg))
-              mapEntryMap.map(mapEntry.getVarPtr(), std::get<1>(inArg));
-          }
-        }
+        cloneMapOpVariables(builder, valueMap, mapInfoMap, inputs, newInputs,
+                            mapEntry.getVarPtr());
+
+        if (mapEntry.getVarPtrPtr())
+          cloneMapOpVariables(builder, valueMap, mapInfoMap, inputs, newInputs,
+                              mapEntry.getVarPtrPtr());
 
         valueMap.map(
             mapEntry,
-            builder.clone(*mapEntry.getOperation(), mapEntryMap)->getResult(0));
+            builder.clone(*mapEntry.getOperation(), mapInfoMap)->getResult(0));
       }
     }
 
