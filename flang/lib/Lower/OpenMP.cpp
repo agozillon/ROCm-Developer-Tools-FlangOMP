@@ -28,6 +28,7 @@
 #include "mlir/Dialect/OpenMP/OpenMPDialect.h"
 #include "mlir/Transforms/RegionUtils.h"
 #include "llvm/Frontend/OpenMP/OMPConstants.h"
+#include <variant>
 
 using DeclareTargetCapturePair =
     std::pair<mlir::omp::DeclareTargetCaptureClause,
@@ -47,6 +48,9 @@ getOmpObjectSymbol(const Fortran::parser::OmpObject &ompObject) {
                     Fortran::parser::Unwrap<Fortran::parser::ArrayElement>(
                         designator)) {
               sym = GetFirstName(arrayEle->base).symbol;
+            } else if (auto *structComp = Fortran::parser::Unwrap<
+                           Fortran::parser::StructureComponent>(designator)) {
+              sym = structComp->component.symbol;
             } else if (const Fortran::parser::Name *name =
                            Fortran::semantics::getDesignatorNameIfDataRef(
                                designator)) {
@@ -55,6 +59,7 @@ getOmpObjectSymbol(const Fortran::parser::OmpObject &ompObject) {
           },
           [&](const Fortran::parser::Name &name) { sym = name.symbol; }},
       ompObject.u);
+
   return sym;
 }
 
@@ -2210,7 +2215,6 @@ bool ClauseProcessor::processMap(
             converter, firOpBuilder, semanticsContext, stmtCtx, ompObject,
             clauseLocation, asFortran, bounds);
 
-      
           // TODO: Clang special cases this for several other cases (member
           // references as one example), see getMapTypeBits inside of
           // generateInfoForComponentList in Clang's CGOpenMPRuntime for
@@ -2238,41 +2242,70 @@ bool ClauseProcessor::processMap(
                   std::underlying_type_t<llvm::omp::OpenMPOffloadMappingFlags>>(
                   perValMapTypeBit);
 
-          mlir::omp::VariableCaptureKind mapCaptureKind = isCapturedByRef(
-              converter, getOmpObjectSymbol(ompObject), directive);
+          mlir::omp::VariableCaptureKind mapCaptureKind =
+              mlir::omp::VariableCaptureKind::ByRef;
+
+          auto checkIfStructComponent =
+              [](const Fortran::parser::OmpObject &ompObject) {
+                bool isComponent = false;
+                std::visit(
+                    Fortran::common::visitors{
+                        [&](const Fortran::parser::Designator &designator) {
+                          if (auto *structComp = Fortran::parser::Unwrap<
+                                  Fortran::parser::StructureComponent>(
+                                  designator)) {
+                            if (std::holds_alternative<Fortran::parser::Name>(
+                                    structComp->base.u))
+                              isComponent = true;
+                          }
+                        },
+                        [&](const Fortran::parser::Name &name) {}},
+                    ompObject.u);
+
+                return isComponent;
+              };
+
+          // Currently, it appears there's missing symbol information
+          // and bounds information for allocatables and pointers inside
+          // of derived types. The latter needs some additional support
+          // added to the bounds generation whereas the former appears
+          // that it could be a problem when referring to pointer members
+          // via an OpenMP map clause, for the moment we do not handle
+          // these cases and must emit an error.
+          if (checkIfStructComponent(ompObject) &&
+              Fortran::semantics::IsAllocatableOrPointer(
+                  *getOmpObjectSymbol(ompObject)))
+            TODO(currentLocation,
+                 "pointer members of derived types are currently unmappable");
 
           if (Fortran::semantics::IsAllocatableOrPointer(
                   *getOmpObjectSymbol(ompObject))) {
-            // For now, in the case of pointers and allocatables we utilise the
-            // address recovered utilising the symbol directly, rather than the
-            // baseAddr calculated by the BoundsOp generation method. This is
-            // because the original symbol gives us the entire descriptor
-            // structure which contains the pointer and relevant runtime
-            // information for the pointer. We currently map the entire
-            // descriptor structure across to the target.
+            // We mimic what will eventually be a structure
+            // containing a pointer mapping for
+            // allocatables/pointers/target e.g.:
             //
-            // The base address returned by
-            // gatherDataOperandAddrAndBounds currently returns the
-            // address of the underlying pointer data which would yield
-            // direct access to the pointer and allow the mapping of the
-            // pointer without the associated descriptor information.
+            // !$omp target map(from:in, in%map_ptr)
             //
-            // Unfortunately the device side code generated for the target
-            // region depends on this descriptor information as it is generated
-            // with the expectation of it being a regular Fortran
-            // pointer/allocatable with descriptor information and it generates
-            // the operations for accessing and utilising this information.
+            // ===>
             //
-            // Possible TODO: Look into optimisation pass (or other change) that
-            // could allow us to directly pass across the pointer without
-            // associated descriptor information, this could provide performance
-            // increases and would simplify the resulting IR. Although, perhaps
-            // we just lean into Fortran and accept this aspect.
-            mlir::Value varPtrPtr =
+            // map_entry varptr(in) ....
+            // map_entry varptr(map_ptr) varptrptr(in) ...
+            //
+            // This is to attempt to keep the lowering of these consistent
+            // with structures containing pointers that are mapped like the
+            // example above, where we break it into the descriptor being the
+            // main "structure" being mapped and the contained pointer the
+            // specific member being referenced. This is of course implicit,
+            // the user just maps the pointer, target or allocatable.
+            mlir::Value descriptor =
                 converter.getSymbolAddress(*getOmpObjectSymbol(ompObject));
+            mapOperands.push_back(createMapEntryOp(
+                firOpBuilder, clauseLocation, descriptor, nullptr,
+                asFortran.str(), mlir::SmallVector<mlir::Value>{}, mapType,
+                mapCaptureKind, false, descriptor.getType()));
             mapOperands.push_back(
                 createMapEntryOp(firOpBuilder, clauseLocation, baseAddr,
-                                 varPtrPtr, asFortran.str(), bounds, mapType,
+                                 descriptor, asFortran.str(), bounds, mapType,
                                  mapCaptureKind, false, baseAddr.getType()));
             continue;
           }
