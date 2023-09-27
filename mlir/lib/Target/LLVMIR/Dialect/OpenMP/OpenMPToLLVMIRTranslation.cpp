@@ -1850,47 +1850,6 @@ void collectMapDataFromMapOperands(llvm::SmallVector<MapData> &mapData,
   }
 }
 
-// TODO: Move this and the Clang version inside of CGOpenMPRuntime.cpp into the
-// OMPIRBuilder.cpp
-static unsigned getFlagMemberOffset() {
-  unsigned Offset = 0;
-  for (uint64_t Remain = static_cast<
-           std::underlying_type_t<llvm::omp::OpenMPOffloadMappingFlags>>(
-           llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_MEMBER_OF);
-       !(Remain & 1); Remain = Remain >> 1)
-    Offset++;
-  return Offset;
-}
-
-// TODO: Move this and the Clang version inside of CGOpenMPRuntime.cpp into the
-// OMPIRBuilder.cpp
-static llvm::omp::OpenMPOffloadMappingFlags getMemberOfFlag(unsigned Position) {
-  // Rotate by getFlagMemberOffset() bits.
-  return static_cast<llvm::omp::OpenMPOffloadMappingFlags>(
-      ((uint64_t)Position + 1) << getFlagMemberOffset());
-}
-
-// TODO: Move this and the Clang version inside of CGOpenMPRuntime.cpp into the
-// OMPIRBuilder.cpp
-static void
-setCorrectMemberOfFlag(llvm::omp::OpenMPOffloadMappingFlags &Flags,
-                       llvm::omp::OpenMPOffloadMappingFlags MemberOfFlag) {
-  // If the entry is PTR_AND_OBJ but has not been marked with the special
-  // placeholder value 0xFFFF in the MEMBER_OF field, then it should not be
-  // marked as MEMBER_OF.
-  if (static_cast<std::underlying_type_t<llvm::omp::OpenMPOffloadMappingFlags>>(
-          Flags & llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_PTR_AND_OBJ) &&
-      static_cast<std::underlying_type_t<llvm::omp::OpenMPOffloadMappingFlags>>(
-          (Flags & llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_MEMBER_OF) !=
-          llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_MEMBER_OF))
-    return;
-
-  // Reset the placeholder value to prepare the flag for the assignment of the
-  // proper MEMBER_OF value.
-  Flags &= ~llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_MEMBER_OF;
-  Flags |= MemberOfFlag;
-}
-
 // Fortran pointers and allocatables come with descriptor information alongside
 // a pointer to the data itself, currently we map this together as we would a
 // regular C/C++ structure with a pointer member that's been specified
@@ -1961,8 +1920,8 @@ static void processMapWithMembersOf(
       llvm::omp::OpenMPOffloadMappingFlags(parentClause.getMapType().value());
   mapFlag &= ~llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_TARGET_PARAM;
   llvm::omp::OpenMPOffloadMappingFlags memberOfFlag =
-      getMemberOfFlag(combinedInfo.BasePointers.size() - 1);
-  setCorrectMemberOfFlag(mapFlag, memberOfFlag);
+      ompBuilder.getMemberOfFlag(combinedInfo.BasePointers.size() - 1);
+  ompBuilder.setCorrectMemberOfFlag(mapFlag, memberOfFlag);
 
   combinedInfo.Types.emplace_back(mapFlag);
   combinedInfo.DevicePointers.emplace_back(
@@ -1983,7 +1942,7 @@ static void processMapWithMembersOf(
     auto mapFlag =
         llvm::omp::OpenMPOffloadMappingFlags(memberClause.getMapType().value());
     mapFlag &= ~llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_TARGET_PARAM;
-    setCorrectMemberOfFlag(mapFlag, memberOfFlag);
+    ompBuilder.setCorrectMemberOfFlag(mapFlag, memberOfFlag);
     mapFlag |= llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_PTR_AND_OBJ;
     combinedInfo.Types.emplace_back(mapFlag);
     combinedInfo.DevicePointers.emplace_back(
@@ -2482,7 +2441,6 @@ createAlteredByCaptureMap(llvm::SmallVectorImpl<MapData> &mapData,
 }
 
 // Refactor TODO:
-//  * Fix array upper bounds calculation..
 //  * Change the OMPIRBuilder.cpp getArgAccessFromCapture function into
 //    a lambda function and move it out of the IRBuilder and have it have
 //    an isDevice switch so it functions for host/device
@@ -2502,7 +2460,7 @@ createAlteredByCaptureMap(llvm::SmallVectorImpl<MapData> &mapData,
 //    pointers (and other things) and getting the right offset into the
 //    structure lowered from IR.
 //  * Handle duplicate map clauses from being processed multiple times
-//
+//  * Perhaps fix broken test: Flang :: Lower/OpenMP/function-filtering.f90
 static LogicalResult
 convertOmpTarget(Operation &opInst, llvm::IRBuilderBase &builder,
                  LLVM::ModuleTranslation &moduleTranslation) {
