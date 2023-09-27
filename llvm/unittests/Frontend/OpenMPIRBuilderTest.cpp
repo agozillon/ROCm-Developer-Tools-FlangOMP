@@ -5160,18 +5160,22 @@ TEST_F(OpenMPIRBuilderTest, TargetRegion) {
   InputTypes.push_back(Int32Ty);
   InputTypes.push_back(Int32Ty);
 
+  auto SimpleArgAccessorCB = [&](llvm::Argument &Arg, llvm::Value *Input,
+                                 IRBuilderBase &Builder) {
+    if (!OMPBuilder.Config.isTargetDevice())
+      return Input;
 
-  SmallVector<llvm::OffloadEntriesInfoManager::OMPTargetVarCaptureKind>
-      InputCaptureKinds;
-  InputCaptureKinds.push_back(
-      llvm::OffloadEntriesInfoManager::OMPTargetVarCaptureKind::
-          OMPTargetVarCaptureByRef);
-  InputCaptureKinds.push_back(
-      llvm::OffloadEntriesInfoManager::OMPTargetVarCaptureKind::
-          OMPTargetVarCaptureByRef);
-  InputCaptureKinds.push_back(
-      llvm::OffloadEntriesInfoManager::OMPTargetVarCaptureKind::
-          OMPTargetVarCaptureByRef);
+    llvm::Value *Addr = Builder.CreateAlloca(
+        Arg.getType()->isPointerTy() ? Arg.getType()
+                                     : Type::getInt64Ty(Builder.getContext()),
+        OMPBuilder.M.getDataLayout().getAllocaAddrSpace());
+    llvm::Value *AddrAscast =
+        Builder.CreatePointerBitCastOrAddrSpaceCast(Addr, Input->getType());
+    Builder.CreateStore(&Arg, AddrAscast);
+    llvm::Value *Copy = Builder.CreateLoad(Arg.getType(), AddrAscast);
+
+    return Copy;
+  };
 
   llvm::OpenMPIRBuilder::MapInfosTy CombinedInfos;
   auto GenMapInfoCB = [&](llvm::OpenMPIRBuilder::InsertPointTy codeGenIP)
@@ -5184,7 +5188,7 @@ TEST_F(OpenMPIRBuilderTest, TargetRegion) {
   OpenMPIRBuilder::LocationDescription OmpLoc({Builder.saveIP(), DL});
   Builder.restoreIP(OMPBuilder.createTarget(
       OmpLoc, Builder.saveIP(), Builder.saveIP(), EntryInfo, -1, 0, Inputs,
-      InputTypes, InputCaptureKinds, GenMapInfoCB, BodyGenCB));
+      GenMapInfoCB, BodyGenCB, SimpleArgAccessorCB));
   OMPBuilder.finalize();
   Builder.CreateRetVoid();
 
@@ -5240,18 +5244,26 @@ TEST_F(OpenMPIRBuilderTest, TargetRegionDevice) {
   llvm::SmallVector<llvm::Type *> InputTypes;
   InputTypes.push_back(Type::getInt32Ty(Ctx));
   InputTypes.push_back(Type::getInt32Ty(Ctx));
-  
-  SmallVector<llvm::OffloadEntriesInfoManager::OMPTargetVarCaptureKind>
-      InputCaptureKinds;
-  InputCaptureKinds.push_back(
-      llvm::OffloadEntriesInfoManager::OMPTargetVarCaptureKind::
-          OMPTargetVarCaptureByRef);
-  InputCaptureKinds.push_back(
-      llvm::OffloadEntriesInfoManager::OMPTargetVarCaptureKind::
-          OMPTargetVarCaptureByRef);
-  
+
+  auto SimpleArgAccessorCB = [&](llvm::Argument &Arg, llvm::Value *Input,
+                                 IRBuilderBase &Builder) {
+    if (!OMPBuilder.Config.isTargetDevice())
+      return Input;
+
+    llvm::Value *Addr = Builder.CreateAlloca(
+        Arg.getType()->isPointerTy() ? Arg.getType()
+                                     : Type::getInt64Ty(Builder.getContext()),
+        OMPBuilder.M.getDataLayout().getAllocaAddrSpace());
+    llvm::Value *AddrAscast =
+        Builder.CreatePointerBitCastOrAddrSpaceCast(Addr, Input->getType());
+    Builder.CreateStore(&Arg, AddrAscast);
+    llvm::Value *Copy = Builder.CreateLoad(Arg.getType(), AddrAscast);
+
+    return Copy;
+  };
+
   llvm::OpenMPIRBuilder::MapInfosTy CombinedInfos;
-  auto GenMapInfoCB = [&](llvm::OpenMPIRBuilder::InsertPointTy codeGenIP)
+  auto GenMapInfoCB = [&](llvm::OpenMPIRBuilder::InsertPointTy CodeGenIP)
       -> llvm::OpenMPIRBuilder::MapInfosTy & {
     CreateDefaultMapInfos(OMPBuilder, CapturedArgs, CombinedInfos);
     return CombinedInfos;
@@ -5272,8 +5284,8 @@ TEST_F(OpenMPIRBuilderTest, TargetRegionDevice) {
                                   /*Line=*/3, /*Count=*/0);
   Builder.restoreIP(
       OMPBuilder.createTarget(Loc, EntryIP, EntryIP, EntryInfo, /*NumTeams=*/-1,
-                              /*NumThreads=*/0, CapturedArgs, InputTypes,
-                              InputCaptureKinds, GenMapInfoCB, BodyGenCB));
+                              /*NumThreads=*/0, CapturedArgs,
+                              GenMapInfoCB, BodyGenCB, SimpleArgAccessorCB));
   Builder.CreateRetVoid();
   OMPBuilder.finalize();
 

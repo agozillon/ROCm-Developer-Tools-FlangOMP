@@ -341,19 +341,6 @@ public:
     OMPTargetDeviceClauseNone = 0x3
   };
 
-  /// The method in which the variable has been
-  /// captured, which depends on the type and
-  /// the manner in which it was captured by
-  /// the device function e.g. implicitly, or
-  /// through a map. 
-  enum OMPTargetVarCaptureKind : uint32_t {
-    OMPTargetVarCaptureThis = 0x0,
-    OMPTargetVarCaptureByRef = 0x1,
-    OMPTargetVarCaptureByCopy = 0x2,
-    OMPTargetVarCaptureVLAType = 0x3,
-    OMPTargetVarCaptureNone = 0x4
-  };
-
   /// Device global variable entries info.
   class OffloadEntryInfoDeviceGlobalVar final : public OffloadEntryInfo {
     /// Type of the global variable.
@@ -2160,6 +2147,9 @@ public:
   using TargetBodyGenCallbackTy = function_ref<InsertPointTy(
       InsertPointTy AllocaIP, InsertPointTy CodeGenIP)>;
 
+  using TargetGenArgAccessorsCallbackTy = function_ref<Value *(
+      Argument &Arg, Value *Input, IRBuilderBase &Builder)>;
+
   /// Generator for '#omp target'
   ///
   /// \param Loc where the target data construct was encountered.
@@ -2171,14 +2161,17 @@ public:
   /// \param Inputs The input values to the region that will be passed.
   /// as arguments to the outlined function.
   /// \param BodyGenCB Callback that will generate the region code.
-  InsertPointTy createTarget(
-      const LocationDescription &Loc, OpenMPIRBuilder::InsertPointTy AllocaIP,
-      OpenMPIRBuilder::InsertPointTy CodeGenIP,
-      TargetRegionEntryInfo &EntryInfo, int32_t NumTeams, int32_t NumThreads,
-      SmallVectorImpl<Value *> &Inputs, SmallVectorImpl<Type *> &ArgTypes,
-      SmallVectorImpl<OffloadEntriesInfoManager::OMPTargetVarCaptureKind>
-          &InputsCaptureKind,
-      GenMapInfoCallbackTy GenMapInfoCB, TargetBodyGenCallbackTy BodyGenCB);
+  /// \param ArgAccessorFuncCB Callback that will generate accessors
+  /// instructions for passed in target arguments where neccessary.
+  InsertPointTy createTarget(const LocationDescription &Loc,
+                             OpenMPIRBuilder::InsertPointTy AllocaIP,
+                             OpenMPIRBuilder::InsertPointTy CodeGenIP,
+                             TargetRegionEntryInfo &EntryInfo, int32_t NumTeams,
+                             int32_t NumThreads,
+                             SmallVectorImpl<Value *> &Inputs,
+                             GenMapInfoCallbackTy GenMapInfoCB,
+                             TargetBodyGenCallbackTy BodyGenCB,
+                             TargetGenArgAccessorsCallbackTy ArgAccessorFuncCB);
 
   /// Returns __kmpc_for_static_init_* runtime function for the specified
   /// size \a IVSize and sign \a IVSigned. Will create a distribute call
