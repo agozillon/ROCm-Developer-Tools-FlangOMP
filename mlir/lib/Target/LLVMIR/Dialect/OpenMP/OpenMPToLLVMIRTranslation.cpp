@@ -1501,10 +1501,52 @@ convertOmpThreadprivate(Operation &opInst, llvm::IRBuilderBase &builder,
   return success();
 }
 
-int64_t getSizeInBytes(DataLayout &dl, const mlir::Type &type) {
-  if (isa<LLVM::LLVMPointerType>(type))
-    return dl.getTypeSize(cast<LLVM::LLVMPointerType>(type).getElementType());
-  return dl.getTypeSize(type);
+llvm::Value *getSizeInBytes(DataLayout &dl, const mlir::Type &type,
+                            Operation *clauseOp, llvm::IRBuilderBase &builder,
+                            LLVM::ModuleTranslation &moduleTranslation) {
+  uint64_t underlyingTypeSz = dl.getTypeSize(type);
+  // Trying to keep the calculations based on element type for the moment
+  // TODO: this will likely need expanded into a recursive function to get
+  // the nested type.
+  if (auto ptrTy = llvm::dyn_cast_if_present<LLVM::LLVMPointerType>(type)) {
+    underlyingTypeSz = dl.getTypeSize(ptrTy.getElementType());
+    if (auto arrTy = llvm::dyn_cast_if_present<LLVM::LLVMArrayType>(
+            ptrTy.getElementType())) {
+      underlyingTypeSz = dl.getTypeSize(arrTy.getElementType());
+    }
+  }
+
+  if (auto memberClause =
+          mlir::dyn_cast_if_present<mlir::omp::MapEntryOp>(clauseOp)) {
+
+    assert(memberClause.getBounds().size() <= 1 &&
+           "Only 1-D map bounds are currently supported");
+
+    // TODO: Support dimensions > 1 dynamic sizes
+    // This calculates the size to transfer based on bounds and the underlying
+    // element type, provided bounds have been specified (Fortran
+    // pointers/allocatables/target and arrays that have sections specified fall
+    // into this for the time being).
+    if (!memberClause.getBounds().empty()) {
+      if (auto boundOp = mlir::dyn_cast_if_present<mlir::omp::DataBoundsOp>(
+              memberClause.getBounds()[0].getDefiningOp())) {
+        llvm::Value *extent = builder.CreateAdd(
+            builder.CreateSub(
+                moduleTranslation.lookupValue(boundOp.getUpperBound()),
+                moduleTranslation.lookupValue(boundOp.getLowerBound())),
+            builder.getInt64(1));
+        // The size in bytes x number of elements, the sizeInBytes stored is the
+        // underyling types size, e.g. if ptr<i32>, it'll be the i32's size, so
+        // we do some on the fly runtime math to get the size in bytes from the
+        // extent (ub - lb) * sizeInBytes.
+        // NOTE: This may need some adjustment for members with more complex
+        // types.
+        return builder.CreateMul(extent, builder.getInt64(underlyingTypeSz));
+      }
+    }
+  }
+
+  return builder.getInt64(underlyingTypeSz);
 }
 
 // Converts the MLIR enum flag to the LLVM OMPIRBuilder flag
@@ -1662,7 +1704,7 @@ struct MapData {
   llvm::Value *pointer;
   llvm::Value *kernelValue;
   llvm::Type *type;
-  uint64_t sizeInBytes;
+  llvm::Value *sizeInBytes;
   llvm::OffloadEntriesInfoManager::OMPTargetVarCaptureKind captureKind;
 
   // The vector contains a mapping of MapData -> MembersOf MapData, in most
@@ -1721,7 +1763,8 @@ static MapData *findMapDataForVariable(llvm::SmallVectorImpl<MapData> &mapData,
 void collectMapDataFromMapOperands(llvm::SmallVector<MapData> &mapData,
                                    llvm::SmallVector<Value> &mapOperands,
                                    LLVM::ModuleTranslation &moduleTranslation,
-                                   DataLayout &dl) {
+                                   DataLayout &dl,
+                                   llvm::IRBuilderBase &builder) {
   auto getMapData =
       [&](Value val,
           llvm::OffloadEntriesInfoManager::OMPTargetVarCaptureKind cap,
@@ -1733,15 +1776,15 @@ void collectMapDataFromMapOperands(llvm::SmallVector<MapData> &mapData,
       map.isDeclareTarget = true;
       map.basePointer = refPtr;
       map.pointer = map.kernelValue;
-      map.sizeInBytes = getSizeInBytes(dl, val.getType());
     } else { // regular mapped variable
       map.kernelValue = moduleTranslation.lookupValue(val);
       map.isDeclareTarget = false;
       map.basePointer = map.kernelValue;
       map.pointer = map.kernelValue;
-      map.sizeInBytes = getSizeInBytes(dl, val.getType());
     }
 
+    map.sizeInBytes =
+        getSizeInBytes(dl, val.getType(), clauseOp, builder, moduleTranslation);
     map.type = getLLVMIRType(val.getType(), moduleTranslation);
     map.captureKind = cap;
     map.mapClause = clauseOp;
@@ -1928,7 +1971,7 @@ static void processMapWithMembersOf(
       parentMap.mapClause->getLoc(), ompBuilder));
   combinedInfo.BasePointers.emplace_back(parentMap.basePointer);
   combinedInfo.Pointers.emplace_back(parentMap.pointer);
-  combinedInfo.Sizes.emplace_back(builder.getInt64(parentMap.sizeInBytes));
+  combinedInfo.Sizes.emplace_back(parentMap.sizeInBytes);
 
   ////////// Mapping of Members Segment //////////
   for (MapData &mappedMembers : parentMap.membersOf) {
@@ -1983,6 +2026,9 @@ static void processMapWithMembersOf(
         parentMap.type, parentMap.pointer, parentAccessIdx, "member_base");
     combinedInfo.BasePointers.emplace_back(memberBase);
 
+    assert(memberClause.getBounds().size() <= 1 &&
+           "Only 1-D map bounds are currently supported");
+
     auto boundOp = mlir::dyn_cast<mlir::omp::DataBoundsOp>(
         memberClause.getBounds()[0].getDefiningOp());
 
@@ -1995,21 +2041,7 @@ static void processMapWithMembersOf(
     llvm::Value *memberIdx = builder.CreateInBoundsGEP(
         mappedMembers.type, loadMember, idx, "member_idx");
     combinedInfo.Pointers.emplace_back(memberIdx);
-
-    // TODO: Support dimensions > 1 dynamic sizes
-    llvm::Value *extent = builder.CreateAdd(
-        builder.CreateSub(
-            moduleTranslation.lookupValue(boundOp.getUpperBound()),
-            moduleTranslation.lookupValue(boundOp.getLowerBound())),
-        builder.getInt64(1));
-    // The size in bytes x number of elements, the sizeInBytes stored is the
-    // underyling types size, e.g. if ptr<i32>, it'll be the i32's size, so
-    // we do some on the fly runtime math to get the size in bytes from the
-    // extent (ub - lb) * sizeInBytes.
-    // NOTE: This may need some adjustment for members with more complex types.
-    size =
-        builder.CreateMul(extent, builder.getInt64(mappedMembers.sizeInBytes));
-    combinedInfo.Sizes.emplace_back(size);
+    combinedInfo.Sizes.emplace_back(mappedMembers.sizeInBytes);
   }
 }
 
@@ -2049,7 +2081,7 @@ static void processMapOp(llvm::IRBuilderBase &builder,
         LLVM::createMappingInformation(mapOp.getLoc(), *ompBuilder));
     combinedInfo.Types.emplace_back(
         llvm::omp::OpenMPOffloadMappingFlags(mapOp.getMapType().value()));
-    combinedInfo.Sizes.emplace_back(builder.getInt64(mapValue.sizeInBytes));
+    combinedInfo.Sizes.emplace_back(mapValue.sizeInBytes);
   }
 
   // Device operands are handled seperately and slightly differently to
@@ -2171,7 +2203,8 @@ convertOmpTargetData(Operation *op, llvm::IRBuilderBase &builder,
   using InsertPointTy = llvm::OpenMPIRBuilder::InsertPointTy;
 
   llvm::SmallVector<MapData> mapData;
-  collectMapDataFromMapOperands(mapData, mapOperands, moduleTranslation, dl);
+  collectMapDataFromMapOperands(mapData, mapOperands, moduleTranslation, dl,
+                                builder);
 
   // Fill up the arrays with all the mapped variables.
   llvm::OpenMPIRBuilder::MapInfosTy combinedInfo;
@@ -2394,31 +2427,19 @@ createAlteredByCaptureMap(llvm::SmallVectorImpl<MapData> &mapData,
         // the OMPIRBuilder.
         //
         // TODO: Handle N-dimensional array range
-        // TODO: Update to use dynamic bounds values, not this gathering of
-        // constant values to insert in the GEP. This should be possible using
-        // the bounds information, can likely use ModuleTranslation to find
-        // the relevant LLVM IR value for the LB bound (or any other required
-        // piece).
         auto mapOp = mlir::dyn_cast<mlir::omp::MapEntryOp>(mapValue.mapClause);
         if (!mapOp.getBounds().empty()) {
           assert(mapOp.getBounds().size() <= 1 &&
                  "Only 1-D map bounds are currently supported");
-          llvm::SetVector<uint64_t> lbs;
-          for (auto bound : mapOp.getBounds()) {
-            auto boundOp =
-                mlir::dyn_cast<mlir::omp::DataBoundsOp>(bound.getDefiningOp());
 
-            if (auto lBound = boundOp.getLowerBound())
-              if (auto constOp =
-                      dyn_cast<LLVM::ConstantOp>(lBound.getDefiningOp()))
-                if (auto intAttr = dyn_cast<IntegerAttr>(constOp.getValue()))
-                  lbs.insert(intAttr.getInt());
-          }
+          auto boundOp = mlir::dyn_cast<mlir::omp::DataBoundsOp>(
+              mapOp.getBounds()[0].getDefiningOp());
 
-          if (mapValue.type->isArrayTy() && !lbs.empty()) {
+          if (mapValue.type->isArrayTy()) {
             // NOTE: 2D GEP required for 1D array boundary it seems
-            auto arr = std::vector<llvm::Value *>{builder.getInt64(0),
-                                                  builder.getInt64(lbs[0])};
+            auto arr = std::vector<llvm::Value *>{
+                builder.getInt64(0),
+                moduleTranslation.lookupValue(boundOp.getLowerBound())};
             mapValue.pointer = builder.CreateInBoundsGEP(
                 mapValue.type, mapValue.pointer, arr, "arrayidx");
           }
@@ -2461,6 +2482,7 @@ createAlteredByCaptureMap(llvm::SmallVectorImpl<MapData> &mapData,
 }
 
 // Refactor TODO:
+//  * Fix array upper bounds calculation..
 //  * Change the OMPIRBuilder.cpp getArgAccessFromCapture function into
 //    a lambda function and move it out of the IRBuilder and have it have
 //    an isDevice switch so it functions for host/device
@@ -2532,7 +2554,8 @@ convertOmpTarget(Operation &opInst, llvm::IRBuilderBase &builder,
   // Parent MapData -> ListOfMembers<MapData>
   llvm::SmallVector<MapData> mapData;
   llvm::SmallVector<Value> mapOperands = targetOp.getMapOperands();
-  collectMapDataFromMapOperands(mapData, mapOperands, moduleTranslation, dl);
+  collectMapDataFromMapOperands(mapData, mapOperands, moduleTranslation, dl,
+                                builder);
 
   // We wish to modify some of the methods in which kernel arguments are
   // passed based on their capture type by the target region, this can
