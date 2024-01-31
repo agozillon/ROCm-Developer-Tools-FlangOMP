@@ -1979,8 +1979,16 @@ bool ClauseProcessor::processMap(
           }
 
           if (std::get<std::optional<Fortran::parser::OmpMapType::Always>>(
-                  oMapType->t))
+                  oMapType->t)) {
+            // NOTE from Andrew Gozillon: Temporary TODO assert at request of
+            // Brian from Apps team to better check where always is used in an
+            // App as it's only supported in the sense that we add the flag at
+            // the moment. Remove when we begin to support always fully. I have
+            // also had to deactive a few tests inside of
+            // Lower/OpenMP/target.f90 & Lower/OpenMP/FIR/target.f90
+            TODO(currentLocation, "OMP_MAP_ALWAYS");
             mapTypeBits |= llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_ALWAYS;
+          }
         } else {
           mapTypeBits |= llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_TO |
                          llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_FROM;
